@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "name": "CE on Rust \u2014 first take",
+  "duration": 12,
+  "teams": [
+    {
+      "id": "red",
+      "count": 3,
+      "color": "#db604b",
+      "weapon": "pistol",
+      "origin": [
+        2,
+        -5.8,
+        -9
+      ],
+      "spacing": [
+        0,
+        0,
+        -2
+      ],
+      "yaw": -1.5708
+    },
+    {
+      "id": "blue",
+      "count": 3,
+      "color": "#4b9be0",
+      "weapon": "sniper",
+      "origin": [
+        10,
+        -5.8,
+        -9
+      ],
+      "spacing": [
+        0,
+        0,
+        -2
+      ],
+      "yaw": 1.5708
+    },
+    {
+      "id": "heavy",
+      "count": 1,
+      "color": "#ddb24b",
+      "weapon": "rocket",
+      "origin": [
+        5,
+        -5.8,
+        -14
+      ],
+      "spacing": [
+        0,
+        0,
+        0
+      ],
+      "yaw": 0
+    }
+  ],
+  "actions": [
+    {
+      "at": 2,
+      "actor": "red",
+      "type": "fire",
+      "target": "blue-1",
+      "count": 4,
+      "every": 1
+    },
+    {
+      "at": 2.5,
+      "actor": "blue",
+      "type": "fire",
+      "target": "red-1",
+      "count": 4,
+      "every": 1
+    },
+    {
+      "at": 7,
+      "actor": "heavy",
+      "type": "fire",
+      "target": "blue-2"
+    },
+    {
+      "at": 8,
+      "actor": "blue-2",
+      "type": "die"
+    },
+    {
+      "at": 10,
+      "actor": "blue-2",
+      "type": "respawn"
+    }
+  ],
+  "camera": [
+    {
+      "at": 0,
+      "position": [
+        1,
+        -1,
+        1
+      ],
+      "target": [
+        6,
+        -4.5,
+        -12
+      ],
+      "fov": 65
+    },
+    {
+      "at": 5,
+      "position": [
+        -3,
+        -2.5,
+        -6
+      ],
+      "target": [
+        6,
+        -4.5,
+        -12
+      ],
+      "fov": 62
+    },
+    {
+      "at": 6,
+      "position": [
+        14,
+        -2,
+        -6
+      ],
+      "target": [
+        4,
+        -4.5,
+        -12
+      ],
+      "fov": 62,
+      "cut": true
+    },
+    {
+      "at": 12,
+      "position": [
+        9,
+        4,
+        -3
+      ],
+      "target": [
+        8,
+        -4,
+        -17
+      ],
+      "fov": 70
+    }
+  ]
+}

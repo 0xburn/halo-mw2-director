@@ -1,0 +1,3 @@
+# Preserve patch context lines and unchanged third-party source formatting.
+patches/*.patch -whitespace
+web/vendor/** -whitespace

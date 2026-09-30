@@ -1,0 +1,858 @@
+{
+  "version": 1,
+  "name": "Rust \u2014 worlds collide",
+  "duration": 24,
+  "teams": [
+    {
+      "id": "mw_red",
+      "count": 4,
+      "model": "soldier",
+      "weapon": "intervention",
+      "color": "#b9775b",
+      "origin": [
+        0,
+        -5.82,
+        -7
+      ],
+      "spacing": [
+        0,
+        0,
+        2.5
+      ]
+    },
+    {
+      "id": "mw_blue",
+      "count": 4,
+      "model": "soldier",
+      "weapon": "intervention",
+      "color": "#768c9c",
+      "origin": [
+        12,
+        -5.82,
+        -7
+      ],
+      "spacing": [
+        0,
+        0,
+        2.5
+      ]
+    },
+    {
+      "id": "halo_red",
+      "count": 4,
+      "model": "chief",
+      "weapon": "sniper",
+      "color": "#ab3530",
+      "origin": [
+        -3,
+        -5.82,
+        -13
+      ],
+      "spacing": [
+        0,
+        0,
+        -3.3
+      ]
+    },
+    {
+      "id": "halo_blue",
+      "count": 4,
+      "model": "chief",
+      "weapon": "sniper",
+      "color": "#4267bb",
+      "origin": [
+        11,
+        -5.82,
+        -13
+      ],
+      "spacing": [
+        0,
+        0,
+        -3.3
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "at": 0,
+      "actor": "mw_red-1",
+      "type": "aim",
+      "target": "mw_blue-1"
+    },
+    {
+      "at": 0,
+      "actor": "mw_red-2",
+      "type": "aim",
+      "target": "mw_blue-2"
+    },
+    {
+      "at": 8.48,
+      "actor": "mw_red-2",
+      "type": "fire",
+      "target": "mw_blue-2",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.5,
+      "actor": "mw_red-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.5,
+      "actor": "mw_red-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "mw_red-3",
+      "type": "aim",
+      "target": "mw_blue-3"
+    },
+    {
+      "at": 8.67,
+      "actor": "mw_red-3",
+      "type": "fire",
+      "target": "mw_blue-3",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.75,
+      "actor": "mw_red-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.75,
+      "actor": "mw_red-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "mw_red-4",
+      "type": "aim",
+      "target": "mw_blue-4"
+    },
+    {
+      "at": 8.86,
+      "actor": "mw_red-4",
+      "type": "fire",
+      "target": "mw_blue-4",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 10.0,
+      "actor": "mw_red-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 15.0,
+      "actor": "mw_red-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "mw_blue-1",
+      "type": "aim",
+      "target": "mw_red-1"
+    },
+    {
+      "at": 8.94,
+      "actor": "mw_blue-1",
+      "type": "fire",
+      "target": "mw_red-1",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.25,
+      "actor": "mw_blue-1",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.25,
+      "actor": "mw_blue-1",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "mw_blue-2",
+      "type": "aim",
+      "target": "mw_red-2"
+    },
+    {
+      "at": 9.13,
+      "actor": "mw_blue-2",
+      "type": "fire",
+      "target": "mw_red-2",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.5,
+      "actor": "mw_blue-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.5,
+      "actor": "mw_blue-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "mw_blue-3",
+      "type": "aim",
+      "target": "mw_red-3"
+    },
+    {
+      "at": 9.32,
+      "actor": "mw_blue-3",
+      "type": "fire",
+      "target": "mw_red-3",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.75,
+      "actor": "mw_blue-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.75,
+      "actor": "mw_blue-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "mw_blue-4",
+      "type": "aim",
+      "target": "mw_red-4"
+    },
+    {
+      "at": 9.51,
+      "actor": "mw_blue-4",
+      "type": "fire",
+      "target": "mw_red-4",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 10.0,
+      "actor": "mw_blue-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 15.0,
+      "actor": "mw_blue-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_red-1",
+      "type": "aim",
+      "target": "halo_blue-1"
+    },
+    {
+      "at": 8.29,
+      "actor": "halo_red-1",
+      "type": "fire",
+      "target": "halo_blue-1",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.25,
+      "actor": "halo_red-1",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.25,
+      "actor": "halo_red-1",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_red-2",
+      "type": "aim",
+      "target": "halo_blue-2"
+    },
+    {
+      "at": 8.48,
+      "actor": "halo_red-2",
+      "type": "fire",
+      "target": "halo_blue-2",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.5,
+      "actor": "halo_red-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.5,
+      "actor": "halo_red-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_red-3",
+      "type": "aim",
+      "target": "halo_blue-3"
+    },
+    {
+      "at": 8.67,
+      "actor": "halo_red-3",
+      "type": "fire",
+      "target": "halo_blue-3",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.75,
+      "actor": "halo_red-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.75,
+      "actor": "halo_red-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_red-4",
+      "type": "aim",
+      "target": "halo_blue-4"
+    },
+    {
+      "at": 8.86,
+      "actor": "halo_red-4",
+      "type": "fire",
+      "target": "halo_blue-4",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 10.0,
+      "actor": "halo_red-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 15.0,
+      "actor": "halo_red-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_blue-1",
+      "type": "aim",
+      "target": "halo_red-1"
+    },
+    {
+      "at": 8.94,
+      "actor": "halo_blue-1",
+      "type": "fire",
+      "target": "halo_red-1",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.25,
+      "actor": "halo_blue-1",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.25,
+      "actor": "halo_blue-1",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_blue-2",
+      "type": "aim",
+      "target": "halo_red-2"
+    },
+    {
+      "at": 9.13,
+      "actor": "halo_blue-2",
+      "type": "fire",
+      "target": "halo_red-2",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.5,
+      "actor": "halo_blue-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.5,
+      "actor": "halo_blue-2",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_blue-3",
+      "type": "aim",
+      "target": "halo_red-3"
+    },
+    {
+      "at": 9.32,
+      "actor": "halo_blue-3",
+      "type": "fire",
+      "target": "halo_red-3",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 9.75,
+      "actor": "halo_blue-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 14.75,
+      "actor": "halo_blue-3",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_blue-4",
+      "type": "aim",
+      "target": "halo_red-4"
+    },
+    {
+      "at": 9.51,
+      "actor": "halo_blue-4",
+      "type": "fire",
+      "target": "halo_red-4",
+      "count": 8,
+      "every": 1.8
+    },
+    {
+      "at": 10.0,
+      "actor": "halo_blue-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        -0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 15.0,
+      "actor": "halo_blue-4",
+      "type": "move",
+      "by": [
+        0,
+        0,
+        0.7
+      ],
+      "duration": 1.8
+    },
+    {
+      "at": 0,
+      "actor": "halo_blue-1",
+      "type": "respawn",
+      "position": [
+        10,
+        -5.82,
+        -7
+      ]
+    },
+    {
+      "at": 0,
+      "actor": "halo_blue-1",
+      "type": "aim",
+      "target": "mw_red-1"
+    },
+    {
+      "at": 2.2,
+      "actor": "mw_red-1",
+      "type": "fire",
+      "target": "mw_blue-1"
+    },
+    {
+      "at": 4,
+      "actor": "mw_red-1",
+      "type": "aim",
+      "target": "halo_blue-1"
+    },
+    {
+      "at": 5.4,
+      "actor": "halo_blue-1",
+      "type": "fire",
+      "target": "mw_red-1"
+    },
+    {
+      "at": 5.43,
+      "actor": "mw_red-1",
+      "type": "die"
+    },
+    {
+      "at": 7.5,
+      "actor": "halo_blue-1",
+      "type": "aim",
+      "target": "halo_red-1"
+    }
+  ],
+  "camera": [
+    {
+      "at": 0,
+      "position": [
+        0,
+        -4.17,
+        -7
+      ],
+      "target": "mw_blue-1",
+      "fov": 76,
+      "pov": "mw_red-1"
+    },
+    {
+      "at": 1.6,
+      "position": [
+        0,
+        -4.17,
+        -7
+      ],
+      "target": "mw_blue-1",
+      "fov": 76,
+      "pov": "mw_red-1"
+    },
+    {
+      "at": 1.95,
+      "position": [
+        0,
+        -4.17,
+        -7
+      ],
+      "target": "mw_blue-1",
+      "fov": 20,
+      "pov": "mw_red-1",
+      "scope": true
+    },
+    {
+      "at": 2.22,
+      "position": [
+        0,
+        -4.13,
+        -7
+      ],
+      "target": "mw_blue-1",
+      "fov": 20,
+      "pov": "mw_red-1",
+      "scope": true
+    },
+    {
+      "at": 2.6,
+      "position": [
+        0,
+        -4.17,
+        -7
+      ],
+      "target": "mw_blue-1",
+      "fov": 76,
+      "pov": "mw_red-1"
+    },
+    {
+      "at": 4,
+      "position": [
+        0,
+        -4.17,
+        -7
+      ],
+      "target": "halo_blue-1",
+      "fov": 76,
+      "pov": "mw_red-1"
+    },
+    {
+      "at": 5.4,
+      "position": [
+        0,
+        -4.17,
+        -7
+      ],
+      "target": "halo_blue-1",
+      "fov": 76,
+      "pov": "mw_red-1"
+    },
+    {
+      "at": 5.9,
+      "position": [
+        -0.2,
+        -5.0,
+        -6.7
+      ],
+      "target": "halo_blue-1",
+      "fov": 80,
+      "pov": "mw_red-1",
+      "roll": -0.28
+    },
+    {
+      "at": 6,
+      "position": [
+        -0.2,
+        -5.0,
+        -6.7
+      ],
+      "target": "halo_blue-1",
+      "fov": 80,
+      "roll": -0.28
+    },
+    {
+      "at": 10,
+      "position": [
+        -10,
+        6,
+        12
+      ],
+      "target": [
+        7,
+        -3.5,
+        -13
+      ],
+      "fov": 70,
+      "caption": "RUST  //  TWO 4v4 SNIPER FIGHTS"
+    },
+    {
+      "at": 12,
+      "position": [
+        -10,
+        9,
+        12
+      ],
+      "target": [
+        7,
+        -3.5,
+        -13
+      ],
+      "fov": 70,
+      "caption": "RUST  //  TWO 4v4 SNIPER FIGHTS"
+    },
+    {
+      "at": 12.1,
+      "position": [
+        -6,
+        -2,
+        -7
+      ],
+      "target": "halo_blue-1",
+      "fov": 55,
+      "cut": true
+    },
+    {
+      "at": 16,
+      "position": [
+        -5,
+        -2.2,
+        -13
+      ],
+      "target": "halo_blue-2",
+      "fov": 55
+    },
+    {
+      "at": 16.1,
+      "position": [
+        16,
+        -2,
+        1
+      ],
+      "target": "mw_red-2",
+      "fov": 60,
+      "cut": true
+    },
+    {
+      "at": 19,
+      "position": [
+        15,
+        -0.7,
+        4
+      ],
+      "target": "mw_red-2",
+      "fov": 60
+    },
+    {
+      "at": 24,
+      "position": [
+        1,
+        17,
+        15
+      ],
+      "target": [
+        10,
+        -3,
+        -16
+      ],
+      "fov": 68
+    }
+  ]
+}

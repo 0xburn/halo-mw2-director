@@ -1,0 +1,3 @@
+reclaimer==2.11.2
+numpy==2.0.2
+Pillow==11.3.0

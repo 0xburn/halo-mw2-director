@@ -1,0 +1,95 @@
+{
+  "world": null,
+  "spawns": null,
+  "spawn": [
+    0,
+    0.1,
+    14
+  ],
+  "yaw": 0,
+  "chief": {
+    "url": null,
+    "height": 2.1,
+    "rotation": [
+      0,
+      0,
+      0
+    ],
+    "idle": null,
+    "walk": null,
+    "animate": true
+  },
+  "rifle": {
+    "url": null,
+    "length": 0.95,
+    "rotation": [
+      0,
+      0,
+      0
+    ],
+    "fire": null,
+    "reload": null
+  },
+  "weapon": {
+    "magazine": 36,
+    "reserve": 108,
+    "burst": 3,
+    "interval": 0.075,
+    "cooldown": 0.45,
+    "reload": 2.2
+  },
+  "selectedWeapon": "pistol",
+  "models": {
+    "pistol": {
+      "url": null,
+      "length": 0.4,
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "sniper": {
+      "url": null,
+      "length": 1.6,
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "rocket": {
+      "url": null,
+      "length": 1.2,
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "intervention": {
+      "url": null,
+      "length": 1.45,
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "sceneOrigin": [
+    8,
+    -5.6,
+    -18
+  ],
+  "scene": "scenes/worlds-collide.json",
+  "soldier": {
+    "url": null,
+    "rotation": [
+      0,
+      0,
+      0
+    ]
+  },
+  "sky": null
+}

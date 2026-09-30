@@ -1,0 +1,25 @@
+Halo / MW2 Director
+
+Native runtime and native patch base:
+IW4L — Copyright 2026 vladtrc
+https://github.com/vladtrc/iw4L
+Apache License, Version 2.0; see IW4L-LICENSE.txt.
+This project modifies IW4L through patches/native-cinema.patch. The upstream
+checkout and its NOTICE remain with a fetched engine copy. No engine binary
+or retail game data is distributed in this repository.
+
+Browser renderer:
+Three.js — Copyright 2010-2025 Three.js Authors
+https://github.com/mrdoob/three.js
+MIT; the full bundled notice is web/vendor/THREE-LICENSE.txt.
+
+Asset conversion dependencies (installed separately):
+Reclaimer, NumPy and Pillow retain their respective licenses. Their packages
+are not vendored here. The original investigation also referenced
+https://github.com/cybersecurity/halo-ce-universal; it is not bundled or linked
+into the native runtime used by this project.
+
+Halo, Master Chief and Halo game assets belong to their respective owners.
+Call of Duty, Modern Warfare 2 and its game assets belong to their respective
+owners. Names describe local asset interoperability; this project is not
+an official release or an endorsement by those owners.

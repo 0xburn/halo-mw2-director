@@ -1,0 +1,2561 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index c43a4e5..3244dec 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1944,6 +1944,7 @@ dependencies = [
+  "asset_game",
+  "asset_material",
+  "asset_transport",
++ "asset_world",
+  "assets",
+  "audio",
+  "bevy",
+@@ -1951,13 +1952,16 @@ dependencies = [
+  "console",
+  "diag",
+  "frame",
++ "fx",
+  "hud",
+  "libc",
+  "master_protocol",
+  "net",
+  "perf",
++ "playerstate_iw4",
+  "render",
+  "render_frontend",
++ "render_fx",
+  "render_gpu",
+  "replay",
+  "serde_json",
+@@ -1965,6 +1969,7 @@ dependencies = [
+  "sha2",
+  "sim",
+  "ui",
++ "xmodel_runtime",
+ ]
+ 
+ [[package]]
+diff --git a/crates/asset_game/src/weapon_catalog.rs b/crates/asset_game/src/weapon_catalog.rs
+index d6ea6a8..aeeb69d 100644
+--- a/crates/asset_game/src/weapon_catalog.rs
++++ b/crates/asset_game/src/weapon_catalog.rs
+@@ -5962,6 +5962,24 @@ impl WeaponBuild {
+ }
+ 
+ impl WeaponRegistry {
++    pub fn configure_local_sniper_hipfire(&mut self) {
++        for row in &mut self.rows {
++            if row.namespace==crate::AssetNamespace::Iw4 && row.name=="wa2000" {
++                let f=&mut row.facts;
++                f.hip_spread_stand_min=0.03;f.hip_spread_stand_max=0.03;
++                f.hip_spread_ducked_min=0.03;f.hip_spread_ducked_max=0.03;
++                f.hip_spread_prone_min=0.03;f.hip_spread_prone_max=0.03;
++                f.hip_spread_move_add=0.;f.hip_spread_turn_add=0.;
++            }
++        }
++        if std::env::var_os("IW4L_CINEMA").is_some() {
++            for row in &mut self.rows {
++                if row.namespace==crate::AssetNamespace::Iw4 && row.name=="usp" {row.facts.damage=0;row.facts.min_damage=0;}
++            }
++        }
++        self.revision=self.revision.wrapping_add(1);
++    }
++
+     pub fn vehicle_compass(&self) -> impl Iterator<Item = (&str, &[String; 2], [i32; 2])> {
+         self.vehicle_compass
+             .iter()
+diff --git a/crates/asset_model/src/body_catalog.rs b/crates/asset_model/src/body_catalog.rs
+index be3f56f..38f76e1 100644
+--- a/crates/asset_model/src/body_catalog.rs
++++ b/crates/asset_model/src/body_catalog.rs
+@@ -171,6 +171,16 @@ impl BodyMeshBuild {
+ }
+ 
+ impl BodyMeshCatalog {
++    /// Override only the opt-in local preview's axis body; preserve normal kits.
++    pub fn install_local_axis(&mut self, entry: BodyMeshEntry) {
++        let mut kits=self.kits().clone();
++        let arms=kits.axis.as_ref().and_then(|k|k.arms.clone());
++        kits.axis=Some(crate::SoldierKit{body:entry.skel.name.clone(),head:None,arms});
++        self.entries.insert(entry.skel.name.clone(),entry);
++        self.kits_cache=std::sync::OnceLock::new();
++        let _=self.kits_cache.set(kits);
++    }
++
+     pub fn len(&self) -> usize {
+         self.entries.len()
+     }
+diff --git a/crates/asset_model/src/soldiers.rs b/crates/asset_model/src/soldiers.rs
+index ee8a360..f2fedf2 100644
+--- a/crates/asset_model/src/soldiers.rs
++++ b/crates/asset_model/src/soldiers.rs
+@@ -274,3 +274,11 @@ fn distinctive_tokens(name: &str) -> impl Iterator<Item = &str> {
+         )
+     })
+ }
++
++/// Explicit cast slots for the opt-in local cinematic. Ordinary matches use teams.
++pub fn cinema_kit_is_axis(client:u32, team:i32, ffa:Option<u8>)->bool {
++    static CINEMA:std::sync::OnceLock<bool>=std::sync::OnceLock::new();
++    if *CINEMA.get_or_init(||std::env::var_os("IW4L_CINEMA").is_some()) {
++        (8..16).contains(&client)
++    } else { kit_assignment_is_axis(team,ffa) }
++}
+diff --git a/crates/asset_model/src/world_weapon_catalog.rs b/crates/asset_model/src/world_weapon_catalog.rs
+index 71226ba..5a5ec4e 100644
+--- a/crates/asset_model/src/world_weapon_catalog.rs
++++ b/crates/asset_model/src/world_weapon_catalog.rs
+@@ -243,6 +243,12 @@ impl WorldWeaponBuild {
+ }
+ 
+ impl WorldWeaponCatalog {
++    /// Replace one local presentation model without changing weapon identity.
++    pub fn replace_local_model(&mut self, index:usize, entry:WorldWeaponEntry) {
++        assert_eq!(self.entries[index].key(),entry.key());
++        self.entries[index]=entry;
++    }
++
+     pub fn identity(&self) -> u64 {
+         self.identity
+     }
+diff --git a/crates/asset_world/src/model_mesh.rs b/crates/asset_world/src/model_mesh.rs
+index 27193d0..e8cdb2f 100644
+--- a/crates/asset_world/src/model_mesh.rs
++++ b/crates/asset_world/src/model_mesh.rs
+@@ -357,6 +357,7 @@ pub struct MapXModelSceneCatalog {
+ 
+     surface_materials: BTreeMap<MapXModelAssetKey, Vec<Option<crate::MaterialIndex>>>,
+     resolved: bool,
++    local_materials: BTreeMap<MapXModelAssetKey, Vec<Option<crate::MaterialIndex>>>,
+ }
+ 
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+@@ -413,10 +414,18 @@ impl MapXModelSceneCatalog {
+             }
+             self.surface_materials.insert(key.clone(), row);
+         }
++        self.surface_materials.extend(self.local_materials.clone());
+         self.resolved = true;
+         census
+     }
+ 
++    pub fn install_local_model(&mut self, name: String, skel: Arc<ModelSkel>, materials: Vec<Option<crate::MaterialIndex>>) {
++        let key = MapXModelAssetKey(name);
++        self.insert(key.clone(), MapXModelSceneAsset::Iw4(skel));
++        self.local_materials.insert(key.clone(), materials.clone());
++        self.surface_materials.insert(key, materials);
++    }
++
+     pub fn materials_resolved(&self) -> bool {
+         self.resolved
+     }
+diff --git a/crates/assets/src/gltf_export.rs b/crates/assets/src/gltf_export.rs
+index f39c9aa..531a8cf 100644
+--- a/crates/assets/src/gltf_export.rs
++++ b/crates/assets/src/gltf_export.rs
+@@ -783,3 +783,58 @@ fn write_png(path: &Path, image: &PendingImage) -> Result<(), String> {
+         .write_image_data(&image.pixels)
+         .map_err(|error| format!("PNG pixels {}: {error}", path.display()))
+ }
++
++
++/// Local asset bridge: preserve source skeletons and material bindings for the
++/// cinematic preview. Geometry remains in IW inches/Z-up in this interchange.
++pub fn export_cinema_sources(prepared: &crate::PreparedMatch, output: &Path) -> Result<(), String> {
++    fs::create_dir_all(output.join("textures")).map_err(|e| e.to_string())?;
++    let catalog = &prepared.materials.population;
++    let mut models = Vec::new();
++    for name in prepared.bodies.names() {
++        let entry = prepared.bodies.get(name).unwrap();
++        models.push(cinema_skel(&entry.skel, &entry.material_keys));
++    }
++    for i in 0..prepared.world_weapons.len() {
++        let entry = prepared.world_weapons.get_at(i).unwrap();
++        if ["cheytac", "barrett", "wa2000", "m21"].iter().any(|n| entry.skel.name.contains(n)) {
++            models.push(cinema_skel(&entry.skel, &entry.material_keys));
++        }
++    }
++    let materials = catalog.materials.iter().map(|m| json!({
++        "name": m.name.as_str(), "sky": catalog.is_sky(m), "technique": m.technique_set.as_str(),
++        "textures": m.textures.iter().map(|t| json!({"semantic":t.semantic,"image":t.image})).collect::<Vec<_>>()
++    })).collect::<Vec<_>>();
++    let mut images = Vec::new();
++    for (i, source) in catalog.images.iter().enumerate() {
++        let Some(decoded) = &source.decoded else { continue; };
++        let layers = decoded.texture_descriptor.size.depth_or_array_layers;
++        let mut paths = Vec::new();
++        for face in 0..layers.min(6) {
++            let mut single = (**decoded).clone();
++            if layers > 1 {
++                single.texture_descriptor.size.depth_or_array_layers = 1;
++                single.texture_descriptor.mip_level_count = 1;
++                let bytes = decoded.data.as_ref().map(|b| b.len() / layers as usize).unwrap_or(0);
++                single.data = decoded.data.as_ref().map(|b| b[face as usize*bytes..(face as usize+1)*bytes].to_vec());
++            }
++            if let Ok((width,height,pixels)) = asset_material::decoded_image_top_level_rgba8(&single) {
++                let file_name = format!("image-{i}-{face}.png");
++                write_png(&output.join("textures").join(&file_name), &PendingImage {file_name: file_name.clone(),width,height,pixels})?;
++                paths.push(format!("textures/{file_name}"));
++            }
++        }
++        images.push(json!({"index":i,"name":source.name.as_str(),"paths":paths}));
++    }
++    let value = json!({"models":models,"materials":materials,"images":images});
++    fs::write(output.join("catalog.json"),serde_json::to_vec(&value).map_err(|e|e.to_string())?).map_err(|e| e.to_string())?;
++    Ok(())
++}
++fn cinema_skel(s: &asset_model::ModelSkel, materials: &[Option<asset_core::MaterialKey>]) -> Value {
++    json!({"name":s.name,"positions":s.positions,"normals":s.normals,"uvs":s.uvs,"indices":s.indices,
++        "surfaces":s.surface_index_ranges,"lod0": [s.surfaces_for_lod(0).start,s.surfaces_for_lod(0).end],
++        "materials":materials.iter().map(|m|m.as_ref().map(|k|k.name.as_str())).collect::<Vec<_>>(),
++        "bones":s.bones.iter().enumerate().map(|(i,b)|json!({"name":s.bone_names[i],"parent":s.parent_of(i),"rotation":b.quat,"translation":b.trans})).collect::<Vec<_>>(),
++        "joints":s.vert_skin.iter().map(|v|v.bones).collect::<Vec<_>>(),
++        "weights":s.vert_skin.iter().map(|v|v.weights).collect::<Vec<_>>()})
++}
+diff --git a/crates/assets/src/lib.rs b/crates/assets/src/lib.rs
+index 41a38e8..7fae840 100644
+--- a/crates/assets/src/lib.rs
++++ b/crates/assets/src/lib.rs
+@@ -1,6 +1,7 @@
+ mod artifact_cache;
+ mod asset_graph;
+ mod gltf_export;
++mod local_chief;
+ mod iwd;
+ mod lane;
+ mod lane_capability;
+@@ -25,7 +26,7 @@ pub use asset_graph::{
+     resolve_after_absorb,
+ };
+ pub use fastfile_iw4::GlyphCapture;
+-pub use gltf_export::{GltfExportSummary, export_prepared_world_gltf};
++pub use gltf_export::{export_cinema_sources, GltfExportSummary, export_prepared_world_gltf};
+ pub use iwd::{IwdSoundIndex, NamespaceSoundIwd, NamespaceTree, NamespaceTrees};
+ pub use lane::{CommonCensus, LANE_GAPS, LaneGap, LoadedWorld, ZoneLane, lane};
+ pub use lane_capability::{LaneStatus, PreparedCapability, lane_status};
+diff --git a/crates/assets/src/session_load/resident_map.rs b/crates/assets/src/session_load/resident_map.rs
+index 1a74850..6cd788b 100644
+--- a/crates/assets/src/session_load/resident_map.rs
++++ b/crates/assets/src/session_load/resident_map.rs
+@@ -62,6 +62,7 @@ pub async fn load_prepared_match(
+             diag::info!(World, "{line}");
+             prepared.report.push(line);
+             prepared.report.extend(progress.timing_report());
++            if let Err(error)=crate::local_chief::install(&mut prepared) {diag::error!(World,"local Chief: {error}");return MatchLoadOutcome::Canceled;}
+             return MatchLoadOutcome::Ready(prepared);
+         }
+     }
+@@ -99,5 +100,6 @@ pub async fn load_prepared_match(
+         });
+     }
+     prepared.report.extend(progress.timing_report());
++    if let Err(error)=crate::local_chief::install(&mut prepared) {diag::error!(World,"local Chief: {error}");return MatchLoadOutcome::Canceled;}
+     MatchLoadOutcome::Ready(prepared)
+ }
+diff --git a/crates/bootstrap/Cargo.toml b/crates/bootstrap/Cargo.toml
+index 7622c17..69771c4 100644
+--- a/crates/bootstrap/Cargo.toml
++++ b/crates/bootstrap/Cargo.toml
+@@ -34,6 +34,10 @@ master_protocol.workspace = true
+ render.workspace = true
+ render_gpu.workspace = true
+ render_frontend.workspace = true
++render_fx.workspace = true
++asset_world.workspace = true
++xmodel_runtime.workspace = true
++fx.workspace = true
+ sim.workspace = true
+ net.workspace = true
+ ui.workspace = true
+@@ -42,6 +46,7 @@ session.workspace = true
+ bots = { path = "../bots" }
+ hud = { path = "../hud" }
+ perf.workspace = true
++playerstate_iw4.workspace = true
+ sha2.workspace = true
+ serde_json.workspace = true
+ 
+diff --git a/crates/bootstrap/src/launch.rs b/crates/bootstrap/src/launch.rs
+index d068f22..0170031 100644
+--- a/crates/bootstrap/src/launch.rs
++++ b/crates/bootstrap/src/launch.rs
+@@ -184,6 +184,17 @@ fn run_export_gltf(games: asset_transport::GamesRoot, artifacts: PathBuf, zone_a
+         assets::MatchLoadOutcome::Ready(prepared) => prepared,
+         assets::MatchLoadOutcome::Canceled => fatal("export-gltf: map walk canceled"),
+     };
++    if std::env::var_os("IW4L_CINEMA_EXPORT").is_some() {
++        assets::export_cinema_sources(&prepared, &artifacts.join("cinema-sources"))
++            .unwrap_or_else(|e| fatal(&format!("cinema export: {e}")));
++    }
++    let bridge_spawns = prepared.prepared_map.spawns.iter().map(|spawn| {
++        serde_json::json!({
++            "classname": spawn.classname,
++            "position": [spawn.origin[0] * 0.0254, spawn.origin[2] * 0.0254, -spawn.origin[1] * 0.0254],
++            "yaw": (spawn.angles[1] - 90.0).to_radians(),
++        })
++    }).collect::<Vec<_>>();
+     let summary = assets::export_prepared_world_gltf(
+         &artifacts,
+         &found.zone_name,
+@@ -191,6 +202,11 @@ fn run_export_gltf(games: asset_transport::GamesRoot, artifacts: PathBuf, zone_a
+         &prepared.materials,
+     )
+     .unwrap_or_else(|error| fatal(&format!("export-gltf: {error}")));
++    let spawn_file = summary.scene.with_file_name("spawns.json");
++    let spawn_bytes = serde_json::to_vec_pretty(&bridge_spawns)
++        .unwrap_or_else(|error| fatal(&format!("serialize spawn metadata: {error}")));
++    std::fs::write(&spawn_file, spawn_bytes)
++        .unwrap_or_else(|error| fatal(&format!("write spawn metadata: {error}")));
+     diag::announce_stdout(&summary.scene.display().to_string());
+     diag::announce_stdout(&summary.report_line());
+ }
+diff --git a/crates/bootstrap/src/lib.rs b/crates/bootstrap/src/lib.rs
+index 688b3ef..43e0ae2 100644
+--- a/crates/bootstrap/src/lib.rs
++++ b/crates/bootstrap/src/lib.rs
+@@ -1,6 +1,9 @@
+ pub mod args;
+ pub mod bench;
+ mod frame_owner;
++mod cinema;
++mod cinema2;
++mod cinema_battlefield;
+ mod launch;
+ mod plugins;
+ 
+diff --git a/crates/bootstrap/src/plugins.rs b/crates/bootstrap/src/plugins.rs
+index 5ee7516..7b05d55 100644
+--- a/crates/bootstrap/src/plugins.rs
++++ b/crates/bootstrap/src/plugins.rs
+@@ -44,6 +44,8 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
+         .add_plugins(RenderPlugin)
+         .add_plugins(SessionPlugin);
+ 
++    crate::cinema::install(app);
++
+     app.edit_schedule(Update, |schedule| {
+         schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+     });
+diff --git a/crates/bots/src/lib.rs b/crates/bots/src/lib.rs
+index 582554e..1b546bd 100644
+--- a/crates/bots/src/lib.rs
++++ b/crates/bots/src/lib.rs
+@@ -31,7 +31,7 @@ pub use query::{
+ };
+ pub use roster::{
+     BotAddQueue, BotAddRequest, BotFireQueue, BotHold, BotRoster, BotTpQueue, BotTpRequest,
+-    BotTpTarget, BotTpWhere, MAX_HOST_BOTS,
++    BotTpTarget, BotTpWhere, MAX_HOST_BOTS, ScriptedBotCommands, ScriptedBotCommand,
+ };
+ pub use sensor::{observe, observe_focused};
+ pub use task::{ActionStage, Decision, SwitchReason, Task, TaskKind};
+diff --git a/crates/bots/src/plugin.rs b/crates/bots/src/plugin.rs
+index 0fc8a28..6e42380 100644
+--- a/crates/bots/src/plugin.rs
++++ b/crates/bots/src/plugin.rs
+@@ -101,6 +101,7 @@ impl Plugin for BotsPlugin {
+     fn build(&self, app: &mut App) {
+         app.init_resource::<BotRoster>()
+             .init_resource::<BotAddQueue>()
++            .init_resource::<crate::ScriptedBotCommands>()
+             .init_resource::<BotHold>()
+             .init_resource::<BotTpQueue>()
+             .init_resource::<BotFireQueue>()
+@@ -346,6 +347,7 @@ fn apply_bot_tp(
+ 
+ #[derive(SystemParam)]
+ struct ThinkBots<'w> {
++    scripted: Res<'w, crate::ScriptedBotCommands>,
+     clock: Res<'w, AuthorityClock>,
+     world: ResMut<'w, AuthorityWorld>,
+     nav: Res<'w, BotNav>,
+@@ -441,6 +443,12 @@ fn think_bots(mut p: ThinkBots) {
+         } else {
+             continue;
+         };
++        if let Some(input)=p.scripted.0.get(&bot.id.0) {
++            if let Some((_,ps))=snapshot.players.iter().find(|(id,_)|*id==bot.id){
++                cmd.angles=look_angles_from_degrees(std::array::from_fn(|axis|input.viewangles[axis]-ps.delta_angles[axis]));
++                cmd.forwardmove=input.forwardmove;cmd.rightmove=input.rightmove;cmd.buttons=input.buttons;
++            }
++        }
+         if fires.iter().any(|target| match target {
+             BotTpTarget::All => true,
+             BotTpTarget::Id(id) => *id == bot.id,
+diff --git a/crates/bots/src/roster.rs b/crates/bots/src/roster.rs
+index 717d985..3f3d092 100644
+--- a/crates/bots/src/roster.rs
++++ b/crates/bots/src/roster.rs
+@@ -173,3 +173,11 @@ pub fn default_class_index(seed: u64, client: ClientId, pick: u32) -> u8 {
+         .wrapping_add(u64::from(pick).wrapping_mul(0x94D0_49BB_1331_11EB));
+     (mix >> 33) as u8
+ }
++
++/// Authored native movement. Values are converted to ordinary UserCmd inputs.
++#[derive(Clone,Copy,Debug,Default)]
++pub struct ScriptedBotCommand {
++    pub viewangles:[f32;3], pub forwardmove:i8, pub rightmove:i8, pub buttons:u32,
++}
++#[derive(Resource,Debug,Default)]
++pub struct ScriptedBotCommands(pub std::collections::BTreeMap<u32,ScriptedBotCommand>);
+diff --git a/crates/hud/src/gpu_list.rs b/crates/hud/src/gpu_list.rs
+index 8c3fc3f..0a3bbcc 100644
+--- a/crates/hud/src/gpu_list.rs
++++ b/crates/hud/src/gpu_list.rs
+@@ -106,7 +106,7 @@ impl PackedList {
+ 
+ #[derive(Component, Default)]
+ pub struct GpuListLatch {
+-    packed: PackedList,
++    pub(crate) packed: PackedList,
+     last_fp: u64,
+     last_shown: usize,
+     hidden: bool,
+diff --git a/crates/hud/src/images.rs b/crates/hud/src/images.rs
+index 8ccd5e5..b93ca75 100644
+--- a/crates/hud/src/images.rs
++++ b/crates/hud/src/images.rs
+@@ -202,6 +202,16 @@ impl HudImages {
+             return;
+         }
+         self.zone_installed = true;
++        if let Some(dir)=std::env::var_os("IW4L_CHIEF_PACK") {
++            if let Ok(bytes)=std::fs::read(Path::new(&dir).join("halo3-general.rgba")) {
++                if bytes.len()==400*600*4 {
++                    self.zone_rgba.insert("halo3_general".into(),(400,600,Arc::new(bytes)));
++                    self.zone_image_name.insert("halo3_general".into(),"halo3_general".into());
++                    self.zone_srgb_reads.insert("halo3_general".into(),true);
++                }
++            }
++        }
++
+         self.zone_uploaded = false;
+         self.blood_plan = Some(blood_material_binding(catalog));
+         self.zone_srgb_reads.extend(
+diff --git a/crates/hud/src/overhead_names.rs b/crates/hud/src/overhead_names.rs
+index d9ae70e..0f0de2c 100644
+--- a/crates/hud/src/overhead_names.rs
++++ b/crates/hud/src/overhead_names.rs
+@@ -313,19 +313,19 @@ fn update_overhead_names(
+         let mut color = name_color(local_meta.client_state_team, team);
+         color[3] = alpha;
+         let mut text_runs = vec![(name, x, pixel.y.round(), scale, color)];
+-        if let Some((icon, level)) = catalog
+-            .as_ref()
+-            .and_then(|c| rank_presentation(c, rank, prestige))
+-        {
++        let halo_rank=std::env::var_os("IW4L_CHIEF_PACK").is_some() && (8..16).contains(&client.0);
++        let rank_info=if halo_rank{Some(("halo3_general", ""))}else{catalog.as_ref().and_then(|c|rank_presentation(c,rank,prestige))};
++        if let Some((icon, level))=rank_info {
+             let text_size = font.pixel_height as f32 * scale;
+-            let icon_size = OVERHEAD_ICON_SIZE_DEFAULT * text_size;
++            let icon_size = OVERHEAD_ICON_SIZE_DEFAULT * text_size * if halo_rank {1.4}else{1.};
++            let icon_height=icon_size * if halo_rank {1.5}else{1.};
+             let level_width = crate::chrome::text_width(font, level) as f32 * rank_scale;
+             let icon_x = x - level_width - icon_size - 2.0 * distance;
+             list.cmds.push(Draw2dCmd {
+                 x: icon_x,
+-                y: pixel.y.round() - (icon_size + text_size) * 0.5,
++                y: pixel.y.round() - (icon_height + text_size) * 0.5,
+                 w: icon_size,
+-                h: icon_size,
++                h: icon_height,
+                 s0: 0.0,
+                 t0: 0.0,
+                 s1: 1.0,
+diff --git a/crates/hud/src/plugin.rs b/crates/hud/src/plugin.rs
+index c3a15d0..56fc656 100644
+--- a/crates/hud/src/plugin.rs
++++ b/crates/hud/src/plugin.rs
+@@ -168,7 +168,8 @@ fn hide_tess_when_hud_hidden(
+     root: Res<HudRootVisible>,
+     screen: Res<AppScreen>,
+     mut frame: ResMut<crate::gpu_list::HudTessGpuFrame>,
+-    mut latches: Query<&mut crate::gpu_list::GpuListLatch>,
++    pending: Res<PendingSplash>,
++    mut latches: Query<(&mut crate::gpu_list::GpuListLatch, Has<SplashRaster>)>,
+ ) {
+     if root.0 == Some(1) || *screen == AppScreen::MainMenu {
+         return;
+@@ -176,8 +177,13 @@ fn hide_tess_when_hud_hidden(
+     frame.clear_geometry();
+     frame.visible = false;
+ 
+-    for mut latch in &mut latches {
+-        latch.mark_hidden();
++    for (mut latch, is_splash) in &mut latches {
++        if is_splash && pending.cinematic_active() {
++            frame.append_packed(&latch.packed);
++            frame.visible = true;
++        } else {
++            latch.mark_hidden();
++        }
+     }
+ }
+ 
+diff --git a/crates/hud/src/splash.rs b/crates/hud/src/splash.rs
+index 897a3e8..289641c 100644
+--- a/crates/hud/src/splash.rs
++++ b/crates/hud/src/splash.rs
+@@ -23,6 +23,29 @@ pub struct PendingSplash {
+     pub key: Option<String>,
+     pub optional_number: i32,
+     queued: std::collections::VecDeque<(String, i32)>,
++    cinematic_until_ms: Option<i32>,
++    reset_slots: bool,
++}
++
++impl PendingSplash {
++    /// A authored punchline takes priority over incidental XP award queues.
++    pub fn cinematic(&mut self, key: &str, optional: i32) {
++        self.queued.clear();
++        self.key = Some(key.into());
++        self.optional_number = optional;
++        self.cinematic_until_ms = Some(i32::MAX);
++        self.reset_slots = true;
++    }
++    pub fn reset_cinematic(&mut self) {
++        self.queued.clear();
++        self.key = None;
++        self.cinematic_until_ms = None;
++        self.reset_slots = true;
++    }
++    pub(crate) fn cinematic_active(&self) -> bool {
++        self.cinematic_until_ms
++            .is_some_and(|end| (milliseconds() as i32) < end)
++    }
+ }
+ 
+ #[derive(Resource, Default)]
+@@ -269,6 +292,13 @@ fn activate_pending(
+         return Some(key);
+     };
+     let duration_ms = splash_duration_ms(table.cell(row, SPLASH_COL_DURATION));
++    if pending.cinematic_until_ms == Some(i32::MAX) {
++        pending.cinematic_until_ms = Some(now_ms.saturating_add(duration_ms));
++        diag::info!(
++            Ui,
++            "CINEMA PROMOTION overlay key={key} duration_ms={duration_ms}"
++        );
++    }
+     let (index, slot) = activate_splash(0, row, duration_ms, pending.optional_number, now_ms);
+     slots.slots[index] = slot;
+     None
+@@ -302,6 +332,10 @@ pub(crate) fn update_splash(
+     if !surface.is_ready() {
+         return;
+     }
++    if pending.reset_slots {
++        *slots = SplashSlots::default();
++        pending.reset_slots = false;
++    }
+     for cmd in received.read().filter(|cmd| cmd.slot == 0) {
+         pending.queued.push_back((cmd.key.clone(), cmd.optional));
+     }
+diff --git a/crates/net/src/policy/killcam.rs b/crates/net/src/policy/killcam.rs
+index ecb46c4..dc18f87 100644
+--- a/crates/net/src/policy/killcam.rs
++++ b/crates/net/src/policy/killcam.rs
+@@ -11,6 +11,14 @@ pub(crate) fn play_script_seats(
+     now_ms: i32,
+     scripted: &[(ClientId, sim::ScriptSeat)],
+ ) {
++    // A directed scene stays on the live world after a death. Archived killcam
++    // snapshots would rewind every actor underneath the authored camera cut.
++    if std::env::var_os("IW4L_CINEMA").is_some() {
++        for viewer in seats.viewers() {
++            seats.clear(viewer);
++        }
++        return;
++    }
+     for viewer in seats.viewers() {
+         if !scripted.iter().any(|(id, _)| *id == viewer) {
+             seats.clear(viewer);
+diff --git a/crates/playerstate_iw4/src/lib.rs b/crates/playerstate_iw4/src/lib.rs
+index 371ebcb..fa8cda2 100644
+--- a/crates/playerstate_iw4/src/lib.rs
++++ b/crates/playerstate_iw4/src/lib.rs
+@@ -14,7 +14,7 @@ pub use chrome::{
+     mode0_from_kill_cam_entity, third_person_in_killcam,
+ };
+ pub use playerstate::{
+-    AnimPair, ENTITYNUM_NONE, PERK_COLDBLOODED, PERK_HEARTBREAKER, PERK_PISTOLDEATH, PERK_QUIETER,
++    AnimPair, ENTITYNUM_NONE, PERK_COLDBLOODED, PERK_HEARTBREAKER, PERK_PISTOLDEATH, PERK_QUIETER, PERK_QUICKDRAW, PERK_FASTSNIPE,
+     PlayerState, eflags, get_viewmodel_weapon_index, mantle_flags, other_flags, pm_flags,
+     weap_flags,
+ };
+diff --git a/crates/playerstate_iw4/src/playerstate.rs b/crates/playerstate_iw4/src/playerstate.rs
+index 9836c3d..7216468 100644
+--- a/crates/playerstate_iw4/src/playerstate.rs
++++ b/crates/playerstate_iw4/src/playerstate.rs
+@@ -304,6 +304,9 @@ impl PlayerState {
+ 
+ pub const PERK_PISTOLDEATH: u32 = 1 << 7;
+ 
++pub const PERK_QUICKDRAW: u32 = 1 << 26;
++pub const PERK_FASTSNIPE: u32 = 1 << 30;
++
+ pub const PERK_QUIETER: u32 = 1 << 8;
+ 
+ pub const PERK_COLDBLOODED: u32 = 1 << 27;
+diff --git a/crates/render_anim/src/occupancy/remote_body.rs b/crates/render_anim/src/occupancy/remote_body.rs
+index 7e9fa2c..58dd7ee 100644
+--- a/crates/render_anim/src/occupancy/remote_body.rs
++++ b/crates/render_anim/src/occupancy/remote_body.rs
+@@ -229,7 +229,7 @@ fn occupy_remote_scene_ents(
+             .and_then(|snap| snap.meta.for_client(client));
+         let ffa_team = meta.and_then(|m| m.ffa_team);
+         let client_state_team = meta.map(|m| m.client_state_team).unwrap_or(0);
+-        let axis = asset_model::kit_assignment_is_axis(client_state_team, ffa_team);
++        let axis = asset_model::cinema_kit_is_axis(client.0, client_state_team, ffa_team);
+         let held = remote_pose_sample(runtime).weapon;
+         let (kit_models, radius, hide_part_bits) = match live_kits {
+             Some((kits, world)) => {
+@@ -354,7 +354,7 @@ fn sync_remote_bodies(
+             .and_then(|snap| snap.meta.for_client(client));
+         let ffa_team = meta.and_then(|m| m.ffa_team);
+         let client_state_team = meta.map(|m| m.client_state_team).unwrap_or(0);
+-        let Some(kit) = kits.kit(asset_model::kit_assignment_is_axis(client_state_team, ffa_team))
++        let Some(kit) = kits.kit(asset_model::cinema_kit_is_axis(client.0, client_state_team, ffa_team))
+         else {
+             if remote.is_some() {
+                 commands
+@@ -754,7 +754,14 @@ impl<'a> RemotePoseFrame<'a> {
+         let slot_lods = slot.lods;
+         let scene_ent_hidden = slot.hidden;
+         let last_cache_hits = self.last_cache_hits;
+-        let axis = asset_model::kit_assignment_is_axis(remote.client_state_team, remote.ffa_team);
++        // A live player's slot is its entity number. client_num is the victim
++        // reference on corpse entities, and is not the live actor's identity.
++        let cast_client = if is_corpse {
++            runtime.next_state.client_num as u32
++        } else {
++            persist_key
++        };
++        let axis = asset_model::cinema_kit_is_axis(cast_client, remote.client_state_team, remote.ffa_team);
+         let eye = self.eye;
+         let ramp = self.ramp;
+         let dobj_poses = &mut *self.dobj_poses;
+diff --git a/crates/render_anim/src/occupancy/script_model.rs b/crates/render_anim/src/occupancy/script_model.rs
+index 4b0ea4d..a0b6ce0 100644
+--- a/crates/render_anim/src/occupancy/script_model.rs
++++ b/crates/render_anim/src/occupancy/script_model.rs
+@@ -342,6 +342,7 @@ fn apply_presented_script_model_dobjs(
+         by_owner.entry(*owner).or_insert(state);
+     }
+     for (mut owner, mut visibility) in &mut owners {
++        if owner.metadata.gameobject == "local_cinema_prop" { continue; }
+         let Some(authority_owner) = owner.authority_owner else {
+             *visibility = Visibility::Hidden;
+             continue;
+@@ -559,7 +560,8 @@ fn pose_script_models(
+         let owner_id = owner
+             .authority_owner
+             .and_then(|owner| owner.script_model())
+-            .map(|id| id.to_wire());
++            .map(|id| id.to_wire())
++            .or_else(|| (owner.metadata.gameobject == "local_cinema_prop").then(|| owner.id.source_ordinal()));
+         let focused_owner_id = focus_id.filter(|wanted| owner_id == Some(*wanted));
+         if let Some(id) = focused_owner_id {
+             focus.refuse(id, &owner.current_model.0, "unclassified_branch");
+diff --git a/crates/render_frontend/src/assemble/mod.rs b/crates/render_frontend/src/assemble/mod.rs
+index a798450..3731550 100644
+--- a/crates/render_frontend/src/assemble/mod.rs
++++ b/crates/render_frontend/src/assemble/mod.rs
+@@ -4,6 +4,10 @@ pub mod drawsurf;
+ mod match_reset;
+ pub mod pack;
+ 
++/// Presentation overrides after posing, before native draw lists are consumed.
++#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub struct ViewmodelDrawReady;
++
+ #[derive(bevy::ecs::schedule::ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+ pub(crate) struct StaticSunAndFx;
+ 
+@@ -89,6 +93,7 @@ impl Plugin for RenderAssemblePlugin {
+         .add_systems(
+             Update,
+             rebuild_draw_lanes
++                .after(ViewmodelDrawReady)
+                 .after(crate::adapters::anim::fpv_present::FpvPlacementSet)
+                 .after(crate::adapters::anim::fpv_present::FpvGeometrySet)
+                 .after(frame::WorkerCmdSet::AddSceneEnt)
+diff --git a/crates/render_frontend/src/lib.rs b/crates/render_frontend/src/lib.rs
+index d61b8c7..aa6cd9a 100644
+--- a/crates/render_frontend/src/lib.rs
++++ b/crates/render_frontend/src/lib.rs
+@@ -29,3 +29,6 @@ pub use prepare::worker_cmds::{
+     WorkerCmdBusy, WorkerCmdBusyInput, WorkerCmdError, WorkerCmdQueues, enqueue_cell_frustum_cmds,
+     worker_cmd_dispatch_skips_device_lost,
+ };
++
++// Native cinematic extensions can control first-person visibility.
++pub use render_anim::FpvDrawPlan;
+diff --git a/crates/sim/src/carrier.rs b/crates/sim/src/carrier.rs
+index a11f7be..d85df4f 100644
+--- a/crates/sim/src/carrier.rs
++++ b/crates/sim/src/carrier.rs
+@@ -256,6 +256,72 @@ impl SimWorld {
+         }
+     }
+ 
++    /// Apply a local cinematic loadout without healing or resurrecting actors.
++    pub fn configure_cinema_actor(&mut self,id:ClientId,health:i32,name:&str,pro:bool) {
++        let mut frame=self.frame();
++        let meta=frame.client_meta_mut(id);
++        meta.max_health=health;
++        meta.name=[0;16];
++        for (dst,src) in meta.name.iter_mut().zip(name.as_bytes().iter().take(15)){*dst=*src;}
++        if pro {
++            for perk in ["specialty_fastreload","specialty_quickdraw","specialty_fastsnipe","specialty_lightweight","specialty_heartbreaker","specialty_quieter"] {
++                crate::script_player::set_perk(&mut frame,id,perk,true);
++            }
++        }
++        if let Some(ps)=frame.player_mut(id){
++            ps.max_health=health;ps.health=ps.health.min(health);
++            if pro {ps.move_speed_scale_multiplier=1.07;}
++            // Local take tuning: let the Intervention's accuracy settle during
++            // the imported scope raise. This is a cinematic override, not a
++            // claimed reconstruction of the retail ADS/spread boundary.
++            if id.0==0 {
++                ps.spread_override=1;
++                ps.spread_override_state=if ps.f_weapon_pos_frac>=0.4 {2}else{0};
++            }
++        }
++    }
++
++    pub fn set_cinema_damage_sources(&mut self,id:ClientId,allowed:Vec<ClientId>) {
++        self.frame().ecs().get_resource_or_insert_with(crate::damage::CinemaDamageSources::default).0.insert(id,allowed);
++    }
++
++    /// Scene vehicles use swept contact checks before entering the normal damage pipeline.
++    pub fn cinema_contact_damage(&mut self, _tick: Tick, attacker: ClientId, target: ClientId, origin: [f32;3], amount: i32) -> bool {
++        let mut frame=self.frame();
++        let Some(victim)=frame.client_meta(target) else{return false;};
++        let target_life=victim.life_sequence;
++        let Some(killer)=frame.client_meta(attacker) else{return false;};
++        let attacker_life=killer.life_sequence;
++        let weapon=frame.player(attacker).map_or(0,|p|p.weapon);
++        let intent=crate::damage::DamageAttempt {
++            source:crate::DamageSource::Melee, pellet:crate::PelletId(0),attacker,attacker_life,target,target_life,
++            weapon,amount,killcam_entity_start_time:0,inflictor_origin:Some(origin),hitloc:0,
++        };
++        if frame.player(target).is_none_or(|p|p.health<=0){return false;}
++        frame.ecs().get_resource_or_insert_with(crate::damage::CinemaDamageQueue::default).0.push(crate::damage::CinemaDamage::Contact(intent));
++        true
++    }
++
++    pub fn cinema_blast(&mut self,_tick:Tick,attacker:ClientId,origin:[f32;3],radius:f32,amount:f32) {
++        let mut frame=self.frame();
++        let Some(meta)=frame.client_meta(attacker) else{return;};
++        let life=meta.life_sequence;
++        let weapon=frame.player(attacker).map_or(0,|p|p.weapon);
++        let blast=crate::damage::ExplosionBlast {
++            origin,radius,inner_damage:amount,outer_damage:amount*0.2,weapon,
++            source:crate::DamageSource::Radius(crate::ScriptModelId::from_wire(0x30000001)),
++            attacker,attacker_life:life,killcam_entity_start_time:0,
++        };
++        frame.ecs().get_resource_or_insert_with(crate::damage::CinemaDamageQueue::default).0.push(crate::damage::CinemaDamage::Blast(blast));
++    }
++
++    /// Keep scripted actors alive between authored death cues in a local take.
++    pub fn cinema_keep_alive(&mut self, id:ClientId) {
++        if let Some(ps)=self.frame().player_mut(id) {
++            if ps.health>0 {ps.health=10000;ps.max_health=10000;}
++        }
++    }
++
+     pub fn set_origin(&mut self, id: ClientId, origin: [f32; 3]) -> bool {
+         self.frame().set_origin(id, origin)
+     }
+diff --git a/crates/sim/src/combat.rs b/crates/sim/src/combat.rs
+index bcd5a3c..46a9cf2 100644
+--- a/crates/sim/src/combat.rs
++++ b/crates/sim/src/combat.rs
+@@ -663,6 +663,9 @@ pub(crate) fn advance_weapon_command(
+                         ads_frac,
+                         aim_spread_scale,
+                     );
++                    if std::env::var_os("IW4L_CINEMA").is_some() {
++                        diag::info!(Sim,"CINEMA SHOT actor={} ads={:.3} cone={:.3}",id.0,ads_frac,spread_degrees);
++                    }
+                     accepted.push(AcceptedShot {
+                         shot_id,
+                         attacker: *id,
+diff --git a/crates/sim/src/damage.rs b/crates/sim/src/damage.rs
+index 84c42d8..435c440 100644
+--- a/crates/sim/src/damage.rs
++++ b/crates/sim/src/damage.rs
+@@ -8,6 +8,25 @@ use gamemode_iw4::{
+     radius_damage_distance_to_aabb,
+ };
+ 
++#[derive(bevy_ecs::prelude::Resource, Default)]
++pub(crate) struct CinemaDamageQueue(pub Vec<CinemaDamage>);
++pub(crate) enum CinemaDamage { Contact(DamageAttempt), Blast(ExplosionBlast) }
++pub(crate) fn apply_cinema_damage(world: &mut bevy_ecs::prelude::World) {
++    let Some(queue)=world.remove_resource::<CinemaDamageQueue>() else{return;};
++    let tick=world.resource::<crate::step::StepRequest>().tick;
++    let mut frame=FrameWorld::from_world(world);
++    for hit in queue.0 {
++        match hit {
++            CinemaDamage::Contact(intent)=>{let _=apply_damage_attempt(&mut frame,tick,&intent);}
++            CinemaDamage::Blast(blast)=>apply_explosion_blast(&mut frame,tick,&blast),
++        }
++    }
++}
++
++// Optional stunt casting: only authored opponents can kill reserved actors.
++#[derive(bevy_ecs::prelude::Resource,Default)]
++pub(crate) struct CinemaDamageSources(pub std::collections::BTreeMap<ClientId,Vec<ClientId>>);
++
+ const AREA_ENTITY_CAPACITY: usize = 0x800;
+ 
+ const _: () = assert!(crate::MATCH_TICK_MS == 50);
+@@ -551,6 +570,13 @@ pub(crate) fn apply_damage_attempt(
+     if intent.amount <= 0 {
+         return DamageOutcome::Refused(DamageRefusal::NonPositive);
+     }
++    if world.ecs().get_resource::<CinemaDamageSources>().and_then(|rules|rules.0.get(&intent.target)).is_some_and(|allowed|!allowed.contains(&intent.attacker)) {
++        return DamageOutcome::Refused(DamageRefusal::FriendlyFire);
++    }
++    if std::env::var_os("IW4L_CINEMA").is_some() && intent.attacker.0>=3 && intent.target.0>=3
++        && intent.attacker!=intent.target && (intent.attacker.0<8)==(intent.target.0<8) {
++        return DamageOutcome::Refused(DamageRefusal::FriendlyFire);
++    }
+     let Some(meta) = world.client_meta(intent.target) else {
+         return DamageOutcome::Refused(DamageRefusal::MissingTarget);
+     };
+diff --git a/crates/sim/src/script_player.rs b/crates/sim/src/script_player.rs
+index f4569c6..0b98f5f 100644
+--- a/crates/sim/src/script_player.rs
++++ b/crates/sim/src/script_player.rs
+@@ -665,6 +665,8 @@ fn perk_bits(name: &str) -> (u32, u32) {
+         "specialty_lightweight" => weapon_iw4::PERK_LIGHTWEIGHT_VIEW_BOB_BIT,
+         "specialty_scavenger" => crate::item::PERK_SCAVENGER,
+         "specialty_quieter" => playerstate_iw4::PERK_QUIETER,
++        "specialty_quickdraw" => playerstate_iw4::PERK_QUICKDRAW,
++        "specialty_fastsnipe" => playerstate_iw4::PERK_FASTSNIPE,
+         "specialty_heartbreaker" => playerstate_iw4::PERK_HEARTBREAKER,
+         "specialty_marathon" => movement_iw4::PERK_MARATHON,
+         "specialty_bulletaccuracy" => weapon_iw4::PERK_BULLETACCURACY,
+diff --git a/crates/sim/src/step.rs b/crates/sim/src/step.rs
+index 79e97e1..0d16f28 100644
+--- a/crates/sim/src/step.rs
++++ b/crates/sim/src/step.rs
+@@ -50,6 +50,7 @@ pub(crate) fn schedule() -> Schedule {
+                 record_collision_state_system,
+                 run_entity_types_system,
+                 dispatch_touches_system,
++                crate::damage::apply_cinema_damage,
+                 crate::script::sync_engine_events,
+                 finalize_system,
+                 publish_snapshot_system,
+@@ -316,9 +317,16 @@ fn run_players_system(ecs: &mut World) {
+                 }
+             });
+             let overlay_reticle = facts.map(|f| f.overlay_reticle).unwrap_or(0);
+-            let (ads_in_rate, ads_out_rate, rechamber_while_ads, ads_fire_only) = facts
++            let (mut ads_in_rate, mut ads_out_rate, rechamber_while_ads, ads_fire_only) = facts
+                 .map(|f| f.ads_frac_context())
+                 .unwrap_or((1.0 / 200.0, 1.0 / 200.0, true, false));
++            // Sleight of Hand Pro: keep prediction and authority on the same
++            // ADS fraction, including the native scope and hands presentation.
++            if ps.perks[0] & playerstate_iw4::PERK_QUICKDRAW != 0 {
++                ads_in_rate *= 2.0;
++                ads_out_rate *= 2.0;
++            }
++
+             let (melee_delay_ms, melee_charge_delay_ms) = facts
+                 .map(|f| (f.melee_delay_ms, f.melee_charge_delay_ms))
+                 .unwrap_or((0, 0));
+diff --git a/crates/ui/src/menu.rs b/crates/ui/src/menu.rs
+index 3807199..f4eb3a3 100644
+--- a/crates/ui/src/menu.rs
++++ b/crates/ui/src/menu.rs
+@@ -55,7 +55,14 @@ pub fn install_frontend_menus(catalog: &mut asset_game::MenuCatalog) -> Result<(
+     catalog.load_definitions(include_str!("../menus/frontend.json"))?;
+     catalog.load_definitions(include_str!("../menus/connection_error.json"))?;
+     catalog.load_definitions(include_str!("../menus/classes.json"))?;
+-    catalog.load_definitions(include_str!("../menus/settings.json"))?;
++    // Some retail menu catalogs have fewer video rows than the authored
++    // settings patch expects. Keep their original settings definitions for
++    // this local compatibility mode instead of blocking a direct map launch.
++    if std::env::var_os("IW4L_RETAIL_SETTINGS").is_some() {
++        diag::warn!(Launch, "using retail settings menus; custom settings overrides disabled");
++    } else {
++        catalog.load_definitions(include_str!("../menus/settings.json"))?;
++    }
+     for (name, menu) in &mut catalog.menus {
+         if let Some(chat) = menu
+             .items
+diff --git a/crates/assets/src/local_chief.rs b/crates/assets/src/local_chief.rs
+new file mode 100644
+index 0000000..576cb20
+--- /dev/null
++++ b/crates/assets/src/local_chief.rs
+@@ -0,0 +1,123 @@
++//! Opt-in local CE mesh bridge. Retail files and normal game loads are untouched.
++use std::{fs, path::Path, sync::Arc};
++use bevy::render::render_resource::{Extent3d, TextureFormat};
++use serde_json::Value;
++use asset_core::{AssetRef, MaterialKey};
++use asset_model::{ModelLodSelector, VertSkin};
++
++pub(crate) fn install(prepared: &mut crate::PreparedMatch) -> Result<(), String> {
++    let Some(path) = std::env::var_os("IW4L_CHIEF_PACK") else { return Ok(()); };
++    if prepared.bodies.get("mp_body_halo_chief").is_some() { return Ok(()); }
++    let path = Path::new(&path);
++    let pack: Value = serde_json::from_slice(&fs::read(path.join("chief.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
++    let mut entry = prepared.bodies.get(pack["template"].as_str().ok_or("missing template")?)
++        .ok_or("Chief template body is absent")?.clone();
++    entry.skel.name="mp_body_halo_chief".into();
++    if let Some(pose)=entry.skel.pose.as_mut(){pose.name=entry.skel.name.clone();}
++    replace_mesh(&mut entry.skel,&mut entry.material_keys,&mut entry.material_edges,Arc::make_mut(&mut prepared.materials.population),path,&pack,"vertices.bin")?;
++    Arc::make_mut(&mut prepared.bodies).install_local_axis(entry);
++    Arc::make_mut(&mut prepared.weapons).configure_local_sniper_hipfire();
++    let pack:Value=serde_json::from_slice(&fs::read(path.join("sniper.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
++    let name=pack["template"].as_str().ok_or("sniper template missing")?;
++    let index=prepared.world_weapons.index_by_name(asset_core::AssetNamespace::Iw4,name).ok_or("sniper template absent")?;
++    let mut weapon=prepared.world_weapons.get_at(index).ok_or("sniper template absent")?.clone();
++    replace_mesh(Arc::make_mut(&mut weapon.skel),&mut weapon.material_keys,&mut weapon.material_edges,Arc::make_mut(&mut prepared.materials.population),path,&pack,"sniper-vertices.bin")?;
++    prepared.world_weapons.replace_local_model(index,weapon);
++    install_battlefield(prepared, path)?;
++    diag::info!(World,"local Halo CE Chief, weapons and battlefield props installed for native cinema");
++    Ok(())
++}
++
++fn install_battlefield(prepared: &mut crate::PreparedMatch, path: &Path) -> Result<(),String> {
++    let ns=asset_core::AssetNamespace::Iw4;
++    let base=prepared.world_weapons.index_by_name(ns,"weapon_wa2000").ok_or("missing prop template")?;
++    for name in ["warthog","plasma_grenade","rocket_projectile","plasma_pistol","rocket"] {
++        let file=path.join(format!("{name}.json"));
++        if !file.exists() {continue;}
++        let pack:Value=serde_json::from_slice(&fs::read(file).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
++        let target=pack["template"].as_str().unwrap_or("weapon_wa2000");
++        let index=prepared.world_weapons.index_by_name(ns,target);
++        let mut model=prepared.world_weapons.get_at(index.unwrap_or(base)).unwrap().clone();
++        replace_mesh(Arc::make_mut(&mut model.skel),&mut model.material_keys,&mut model.material_edges,Arc::make_mut(&mut prepared.materials.population),path,&pack,&format!("{name}-vertices.bin"))?;
++        if name=="plasma_pistol" || name=="rocket" {
++            if let Some(index)=index {prepared.world_weapons.replace_local_model(index,model.clone());}
++            if name=="plasma_pistol" {
++                if let Some(other)=prepared.world_weapons.index_by_name(ns,"weapon_usp_45") {
++                    let mut alias=model.clone();Arc::make_mut(&mut alias.skel).name="weapon_usp_45".into();
++                    prepared.world_weapons.replace_local_model(other,alias);
++                }
++            }
++            else {diag::info!(World,"cinema weapon template unavailable: {target}");}
++        }
++        let key=format!("halo_ce_{name}");
++        let skel=Arc::make_mut(&mut model.skel);skel.name=key.clone();
++        if let Some(pose)=skel.pose.as_mut(){pose.name=key.clone();}
++        skel.radius=Some(250.);
++        let materials=model.material_edges.iter().map(|e|e.bound_index().map(asset_core::MaterialIndex::from_order)).collect();
++        prepared.world.map_xmodel_scene_assets.install_local_model(key,model.skel,materials);
++    }
++    Ok(())
++}
++
++fn replace_mesh(s:&mut asset_model::ModelSkel, keys:&mut Vec<Option<MaterialKey>>, edges:&mut Vec<asset_model::AssetEdge<asset_model::MaterialSpace>>, materials:&mut asset_material::MaterialDefinitions, path:&Path, pack:&Value, vertices:&str)->Result<(),String>{
++    let source_material = keys.iter().flatten().next().ok_or("template has no material")?;
++    let material_template = materials.material_index_by_key(source_material).ok_or("template material missing")?.order();
++    let original = materials.materials[material_template].clone();
++    keys.clear();
++    for m in pack["materials"].as_array().ok_or("missing materials")? {
++        let name = format!("mc/{}",m["name"].as_str().ok_or("bad name")?);
++        let width=m["width"].as_u64().ok_or("bad width")? as u32;
++        let height=m["height"].as_u64().ok_or("bad height")? as u32;
++        let file=m["file"].as_str().ok_or("bad image path")?;
++        if file.contains('/') || file.contains('\\') { return Err("image must be beside chief.json".into()); }
++        let pixels=fs::read(path.join(file)).map_err(|e|e.to_string())?;
++        if pixels.len()!=width as usize*height as usize*4 { return Err("bad RGBA byte length".into()); }
++        let mut material=original.clone();material.name=AssetRef::Real(name.clone());
++        let binding=material.textures.iter_mut().find(|t|t.semantic==asset_material::TS_COLOR_MAP).ok_or("no diffuse binding")?;
++        let mut image=materials.images[binding.image.ok_or("missing diffuse image")?].clone();
++        let mut decoded=(**image.decoded.as_ref().ok_or("undecoded template image")?).clone();
++        decoded.data=Some(pixels);decoded.texture_descriptor.size=Extent3d{width,height,depth_or_array_layers:1};
++        decoded.texture_descriptor.format=TextureFormat::Rgba8Unorm;
++        decoded.texture_descriptor.mip_level_count=1;decoded.texture_view_descriptor=None;
++        image.name=AssetRef::Real(name.clone());image.width=width as u16;image.height=height as u16;image.level_count=1;
++        image.decoded=Some(Arc::new(decoded));image.payload=Arc::new(Vec::new());image.common_owned=false;image.decoded_by=None;image.decoded_variant=None;image.pending_decode=None;
++        binding.image=Some(materials.images.len());materials.images.push(image);
++        keys.push(Some(MaterialKey{namespace:material.namespace,name}));materials.materials.push(material);
++    }
++    s.positions=serde_json::from_value(pack["positions"].clone()).map_err(|e|e.to_string())?;
++    s.normals=serde_json::from_value(pack["normals"].clone()).map_err(|e|e.to_string())?;
++    s.uvs=serde_json::from_value(pack["uvs"].clone()).map_err(|e|e.to_string())?;
++    s.indices=serde_json::from_value(pack["indices"].clone()).map_err(|e|e.to_string())?;
++    let joints:Vec<[u16;4]>=serde_json::from_value(pack["joints"].clone()).map_err(|e|e.to_string())?;
++    let weights:Vec<[f32;4]>=serde_json::from_value(pack["weights"].clone()).map_err(|e|e.to_string())?;
++    let n=s.positions.len();
++    if n==0 || n>100000 || s.normals.len()!=n || s.uvs.len()!=n || joints.len()!=n || weights.len()!=n || s.indices.iter().any(|i|*i as usize>=n) {return Err("invalid Chief geometry".into());}
++    if joints.iter().flatten().any(|b|*b as usize>=s.bones.len()) || weights.iter().any(|w|w.iter().any(|v|!v.is_finite()||*v<0.) || (w.iter().sum::<f32>()-1.).abs()>0.01) {return Err("invalid Chief skin weights".into());}
++    s.vert_skin=joints.into_iter().zip(weights).map(|(bones,weights)|VertSkin{bones,weights,weight_u16:weights.map(|w|(w*65535.).round() as u16)}).collect();
++    s.colors=vec![[1.;4];n];
++    let bytes=fs::read(path.join(vertices)).map_err(|e|e.to_string())?;
++    if bytes.len()!=n*32{return Err("invalid packed vertex buffer".into());}
++    s.packed_vertices=bytes.chunks_exact(32).map(|b|b.try_into().unwrap()).collect();
++    let ranges:Vec<[usize;4]>=serde_json::from_value(pack["ranges"].clone()).map_err(|e|e.to_string())?;
++    if ranges.iter().any(|r|r[0]+r[1]>n||r[2]+r[3]>s.indices.len()) {return Err("invalid surface ranges".into());}
++    let count=ranges.len();s.surface_vertex_ranges=ranges.iter().map(|r|(r[0],r[1])).collect();s.surface_index_ranges=ranges.iter().map(|r|(r[2],r[3])).collect();
++    s.surface_materials=vec![None;count];s.surface_part_bits=vec![[0;6];count];s.surface_deformed=vec![Some(true);count];s.surface_vert_list_count=vec![Some(0);count];
++    // Native animation/culling needs the bones each surface actually uses.
++    for (surface, range) in ranges.iter().enumerate() {
++        for skin in &s.vert_skin[range[0]..range[0]+range[1]] {
++            for (&bone, &weight) in skin.bones.iter().zip(&skin.weights) {
++                if weight > 0. {
++                    let bone=usize::from(bone);
++                    s.surface_part_bits[surface][bone/32] |= 0x8000_0000 >> (bone%32);
++                }
++            }
++        }
++    }
++    // The last distance is the cutoff, not a switch threshold. A zero cutoff
++    // culls a single-LOD imported model from every camera position.
++    s.lod_surf_span=[(0,count as u16),(0,0),(0,0),(0,0)];s.lod=Some(ModelLodSelector::Iw4{lod_start:0,num_lods:1,lod_dist:[100_000.;4]});s.lod_smc=None;s.lod_part_bits=None;
++    s.rigid_verts=s.vert_skin.iter().filter(|v|v.weights[0]==1.).count();s.blend_verts=n-s.rigid_verts;s.radius=Some(90.);
++    let mut min=[f32::INFINITY;3];let mut max=[f32::NEG_INFINITY;3];for v in &s.positions{for k in 0..3{min[k]=min[k].min(v[k]);max[k]=max[k].max(v[k]);}}s.bounds=Some((min,max));
++    asset_model::link::stamp_xmodel_material_edges(keys,edges,&s.surface_materials,materials);
++    Ok(())
++}
+diff --git a/crates/bootstrap/src/cinema.rs b/crates/bootstrap/src/cinema.rs
+new file mode 100644
+index 0000000..1de253f
+--- /dev/null
++++ b/crates/bootstrap/src/cinema.rs
+@@ -0,0 +1,89 @@
++//! Local JSON take driver. Uses the native simulation, animation and Metal renderer.
++use bevy::prelude::*;
++use frame::{AppScreen, ClientSet, RenderSet, UiDraw};
++use render_frontend::{FpvDrawPlan,prepare::scene::camera::{FlyCamera,FpvLens,SimCamera}};
++use render_frontend::adapters::anim::fpv_present::{FpvGeometrySet,FpvPlacementSet};
++use serde_json::Value;
++
++#[derive(Resource)]
++struct Take {
++    duration:f32, setup:String, events:Vec<(f32,String)>, camera:Vec<[f32;8]>,
++    motion:Vec<Vec<[f32;3]>>, stage:u8, stamp:f32, time:f32, cue:usize,
++}
++pub(crate) fn install(app:&mut App) {
++    let Some(path)=std::env::var_os("IW4L_CINEMA") else{return;};
++    let v:Value=serde_json::from_slice(&std::fs::read(path).expect("read native scene")).expect("parse native scene");
++    if v["version"]==2 {crate::cinema2::install(app,v);return;}
++    assert_eq!(v["version"],1,"native scene version");
++    let duration=v["duration"].as_f64().expect("scene duration") as f32;
++    assert!(duration.is_finite() && duration>0. && duration<=300.);
++    let camera:Vec<[f32;8]>=serde_json::from_value(v["camera"].clone()).expect("camera samples");
++    assert!(camera.len()>=(duration*60.) as usize+1 && camera.iter().flatten().all(|x|x.is_finite()));
++    let motion:Vec<Vec<[f32;3]>>=serde_json::from_value(v["motion"].clone()).expect("actor samples");
++    assert!(!motion.is_empty() && motion.iter().all(|f|f.len()==16 && f.iter().flatten().all(|x|x.is_finite())));
++    let events=v["events"].as_array().expect("scene events").iter().map(|e|(e["at"].as_f64().expect("cue time") as f32,e["command"].as_str().expect("cue command").to_owned())).collect();
++    app.insert_resource(Take{duration,setup:v["setup"].as_str().expect("scene setup").into(),events,camera,motion,stage:0,stamp:0.,time:0.,cue:0});
++    app.add_systems(Update,drive.in_set(ClientSet::Input));
++    app.add_systems(Update,move_camera.in_set(ClientSet::Present).before(RenderSet::FrontendPrepare));
++    app.add_systems(Update,hide_viewmodel.in_set(ClientSet::Present)
++        .after(FpvGeometrySet).after(FpvPlacementSet)
++        .after(frame::WorkerCmdSet::AddSceneEnt)
++        .in_set(render_frontend::assemble::ViewmodelDrawReady));
++}
++fn drive(time:Res<Time<Real>>,keys:Res<ButtonInput<KeyCode>>,screen:Res<AppScreen>,mut take:ResMut<Take>,mut queue:ResMut<console::ConsoleQueue>,mut world:Option<ResMut<net::AuthorityWorld>>,mut sim_camera:ResMut<SimCamera>,mut ui:ResMut<UiDraw>) {
++    let now=time.elapsed_secs();
++    if take.stage>=3 && keys.just_pressed(KeyCode::F9) {
++        let p=take.motion[0][0];
++        queue.push_line(&format!("release +speed_throw; force_spawn at {} {} {} 0; wait 0.5s; {}",p[0],p[1],p[2],take.setup));
++        take.stage=2;take.stamp=now;take.time=0.;sim_camera.enabled=true;ui.0=true;return;
++    }
++    if take.stage==0 {
++        if *screen!=AppScreen::InGame{return;}
++        queue.push_line("bot dummy 15");take.stage=1;take.stamp=now;return;
++    }
++    if take.stage==1 {
++        if !world.as_ref().is_some_and(|w|w.0.player_count()>=16) || now-take.stamp<2. {return;}
++        queue.push_line(&take.setup);take.stage=2;take.stamp=now;return;
++    }
++    if take.stage==2 {
++        if now-take.stamp<5. {return;}
++        take.stage=3;take.stamp=now;take.cue=0;ui.0=true;
++        diag::info!(Launch,"NATIVE CINEMA: starting 24-second take; 8 MW2 soldiers + 8 CE Spartans");
++    }
++    take.time=(now-take.stamp).min(take.duration);
++    sim_camera.enabled=take.time<5.8;sim_camera.freeze_fly=true;
++    if take.time>=5.8{ui.0=false;}
++    while take.cue<take.events.len() && take.events[take.cue].0<=take.time {
++        queue.push_line(&take.events[take.cue].1);take.cue+=1;
++    }
++    if let Some(world)=world.as_mut(){
++        let f=((take.time*10.) as usize).min(take.motion.len()-1);
++        for id in 1..16 {
++            world.0.cinema_keep_alive(sim::ClientId(id));
++            world.0.set_origin(sim::ClientId(id),take.motion[f][id as usize]);
++        }
++        if take.time<5.4 {world.0.cinema_keep_alive(sim::ClientId(0));}
++    }
++    if take.stage==3 && take.time>=take.duration {
++        take.stage=4;queue.push_line("screenshot");
++        diag::info!(Launch,"NATIVE CINEMA: take complete, holding final camera");
++    }
++}
++fn move_camera(take:Res<Take>,mut cameras:Query<&mut Transform,With<FlyCamera>>,mut lenses:Query<&mut Projection,With<FpvLens>>) {
++    if take.stage<3 || take.time<5.8{return;}
++    let sample=(take.time*60.).min((take.camera.len()-1) as f32);
++    let i=sample.floor() as usize;let a=take.camera[i];let b=take.camera[(i+1).min(take.camera.len()-1)];let u=sample-i as f32;
++    let p=std::array::from_fn::<_,8,_>(|k|a[k]+(b[k]-a[k])*u);
++    let mut pose=Transform::from_xyz(p[0],p[1],p[2]).looking_at(Vec3::new(p[3],p[4],p[5]),Vec3::Z);
++    pose.rotate_local_z(p[7]);
++    for mut camera in &mut cameras{*camera=pose;}
++    for mut projection in &mut lenses{if let Projection::Perspective(lens)=&mut *projection{lens.fov=p[6].to_radians();}}
++}
++fn hide_viewmodel(take:Res<Take>,mut plan:ResMut<FpvDrawPlan>){
++    if take.stage>=3 && take.time>=5.8 {
++        // Lighting finalization recomputes visible; preserve the decision in
++        // drawgun so it survives the rest of the native render pipeline.
++        plan.drawgun=Some(0);
++        plan.visible=false;
++    }
++}
+diff --git a/crates/bootstrap/src/cinema2.rs b/crates/bootstrap/src/cinema2.rs
+new file mode 100644
+index 0000000..6f9249a
+--- /dev/null
++++ b/crates/bootstrap/src/cinema2.rs
+@@ -0,0 +1,698 @@
++//! Choreography supplies controller inputs. Pmove, bullets and deaths stay native.
++use bevy::prelude::*;
++use bots::{ScriptedBotCommand, ScriptedBotCommands};
++use frame::{AppScreen, ClientSet, RenderSet, UiDraw};
++use playerstate_iw4::PlayerState;
++use render_frontend::adapters::anim::fpv_present::{FpvGeometrySet, FpvPlacementSet};
++use render_frontend::{
++    FpvDrawPlan,
++    prepare::scene::camera::{FlyCamera, FpvLens, SimCamera},
++};
++use serde_json::Value;
++
++#[derive(Default)]
++struct AimMotion {
++    angles: [f32; 3],
++    velocity: [f32; 2],
++    initialized: bool,
++}
++#[derive(Resource, Default)]
++struct Controllers(std::collections::BTreeMap<u32, AimMotion>);
++struct Actor {
++    id: u32,
++    name: String,
++    weapon: String,
++    route: Vec<[f32; 4]>,
++    aim: Vec<Value>,
++    buttons: Vec<[f32; 3]>,
++    yaw: f32,
++}
++#[derive(Resource)]
++pub(super) struct Take {
++    pub(super) json: Value,
++    actors: Vec<Actor>,
++    pub(super) stage: u8,
++    pub(super) stamp: f32,
++    pub(super) t: f32,
++    last_log: i32,
++    cue: usize,
++    death: Option<f32>,
++    seen: [bool; 16],
++    modified: Option<std::time::SystemTime>,
++}
++fn parse(v: Value) -> Take {
++    assert_eq!(v["version"], 2);
++    let actors = v["actors"]
++        .as_array()
++        .expect("actors")
++        .iter()
++        .map(|a| Actor {
++            id: a["id"].as_u64().expect("id") as u32,
++            name: a["name"].as_str().unwrap().into(),
++            weapon: a["weapon"].as_str().unwrap().into(),
++            route: serde_json::from_value(a["route"].clone()).expect("route"),
++            aim: a["aim"].as_array().unwrap().clone(),
++            buttons: serde_json::from_value(a["buttons"].clone()).expect("buttons"),
++            yaw: n(a, "yaw", 90.),
++        })
++        .collect::<Vec<_>>();
++    assert!(actors.iter().all(|a| a.id < 16
++        && !a.route.is_empty()
++        && a.route.iter().flatten().all(|x| x.is_finite())));
++    Take {
++        json: v,
++        actors,
++        stage: 0,
++        stamp: 0.,
++        t: 0.,
++        last_log: -1,
++        cue: 0,
++        death: None,
++        seen: [false; 16],
++        modified: modified(),
++    }
++}
++pub(super) fn n(v: &Value, k: &str, default: f32) -> f32 {
++    v[k].as_f64().map(|x| x as f32).unwrap_or(default)
++}
++fn modified() -> Option<std::time::SystemTime> {
++    std::fs::metadata(std::env::var_os("IW4L_CINEMA")?)
++        .ok()?
++        .modified()
++        .ok()
++}
++pub(crate) fn install(app: &mut App, v: Value) {
++    app.insert_resource(parse(v));
++    super::cinema_battlefield::install(app);
++    app.init_resource::<Controllers>();
++    app.add_systems(Update, drive.in_set(ClientSet::Input).before(control));
++    app.add_systems(
++        Update,
++        control
++            .in_set(ClientSet::Input)
++            .after(net::client::runtime::sample_client_input),
++    );
++    app.add_systems(
++        Update,
++        camera
++            .in_set(ClientSet::Present)
++            .before(RenderSet::FrontendPrepare),
++    );
++    app.add_systems(
++        Update,
++        hide_gun
++            .in_set(ClientSet::Present)
++            .after(FpvGeometrySet)
++            .after(FpvPlacementSet)
++            .after(frame::WorkerCmdSet::AddSceneEnt)
++            .in_set(render_frontend::assemble::ViewmodelDrawReady),
++    );
++}
++pub(super) fn drive(
++    time: Res<Time<Real>>,
++    keys: Res<ButtonInput<KeyCode>>,
++    screen: Res<AppScreen>,
++    mut take: ResMut<Take>,
++    mut queue: ResMut<console::ConsoleQueue>,
++    mut world: Option<ResMut<net::AuthorityWorld>>,
++    mut sim_camera: ResMut<SimCamera>,
++    mut ui: ResMut<UiDraw>,
++    mut inbox: ResMut<net::ClientActionInbox>,
++    mut ids: ResMut<net::ActionRequestIds>,
++) {
++    let now = time.elapsed_secs();
++    if take.stage >= 3 && (keys.just_pressed(KeyCode::F9) || modified() != take.modified) {
++        match std::fs::read(std::env::var_os("IW4L_CINEMA").unwrap())
++            .ok()
++            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
++        {
++            Some(v) if v["version"] == 2 => {
++                *take = parse(v);
++                take.stage = 1;
++                take.stamp = now;
++            }
++            _ => {
++                take.modified = modified();
++                diag::info!(Launch, "CINEMA: reload rejected: invalid JSON");
++                return;
++            }
++        }
++        for a in &take.actors {
++            let p = a.route[0];
++            let request_id = ids.allocate();
++            let _ = inbox.push(
++                sim::ClientId(a.id),
++                sim::ClientAction::ForceSpawn {
++                    request_id,
++                    pick: sim::SpawnPick::At {
++                        origin: [p[1], p[2], p[3]],
++                        yaw: a.yaw,
++                    },
++                },
++            );
++        }
++        sim_camera.enabled = true;
++        ui.0 = true;
++        return;
++    }
++    if take.stage == 0 {
++        if *screen != AppScreen::InGame {
++            return;
++        }
++        queue.push_line(&format!(
++            "bot dummy {}",
++            take.actors.len().saturating_sub(1)
++        ));
++        take.stage = 1;
++        take.stamp = now;
++        return;
++    }
++    if take.stage == 1 {
++        if !world
++            .as_ref()
++            .is_some_and(|w| w.0.player_count() >= take.actors.len())
++            || now - take.stamp < 2.
++        {
++            return;
++        }
++        for a in &take.actors {
++            let p = a.route[0];
++            if a.id == 0 {
++                queue.push_line(&format!(
++                    "release +speed_throw; tp {} {} {} {} 0 &",
++                    p[1], p[2], p[3], a.yaw
++                ));
++            } else {
++                queue.push_line(&format!(
++                    "bot give {} {} &; bot tp {} {} {} {} {} 0 &",
++                    a.id, a.weapon, a.id, p[1], p[2], p[3], a.yaw
++                ));
++            }
++        }
++        if let Some(w) = world.as_ref() {
++            if let Some(points) = take.json["ground_probes"].as_array() {
++                for point in points {
++                    let x = point[0].as_f64().unwrap_or(0.) as f32;
++                    let y = point[1].as_f64().unwrap_or(0.) as f32;
++                    let trace = w.0.trace_world(
++                        [x, y, 900.],
++                        [x, y, -350.],
++                        [0.; 3],
++                        [0.; 3],
++                        sim::MASK_PLAYER_SOLID,
++                    );
++                    diag::info!(
++                        Launch,
++                        "CINEMA GROUND x={x} y={y} z={:.1}",
++                        900. - 1250. * trace.fraction
++                    );
++                }
++            }
++        }
++        if let Some(w) = world.as_ref() {
++            if let Some(lines) = take.json["sightline_probes"].as_array() {
++                for line in lines {
++                    if let (Ok(start), Ok(end)) = (
++                        serde_json::from_value::<[f32; 3]>(line[0].clone()),
++                        serde_json::from_value::<[f32; 3]>(line[1].clone()),
++                    ) {
++                        let trace =
++                            w.0.trace_world(start, end, [0.; 3], [0.; 3], sim::MASK_SHOT);
++                        diag::info!(
++                            Launch,
++                            "CINEMA SIGHTLINE start={start:?} end={end:?} fraction={:.3}",
++                            trace.fraction
++                        );
++                    }
++                }
++            }
++        }
++        if let Some(w) = world.as_mut() {
++            if let Some(actors) = take.json["actors"].as_array() {
++                for actor in actors {
++                    if let (Some(id), Some(allowed)) =
++                        (actor["id"].as_u64(), actor["damage_from"].as_array())
++                    {
++                        w.0.set_cinema_damage_sources(
++                            sim::ClientId(id as u32),
++                            allowed
++                                .iter()
++                                .filter_map(|id| id.as_u64().map(|id| sim::ClientId(id as u32)))
++                                .collect(),
++                        );
++                    }
++                }
++            }
++        }
++        take.stage = 2;
++        take.stamp = now;
++        return;
++    }
++    if take.stage == 2 {
++        if now - take.stamp < 4. {
++            return;
++        }
++        take.stage = 3;
++        take.stamp = now;
++        diag::info!(
++            Launch,
++            "CINEMA V2: live inputs; 30 HP; Sleight of Hand Pro / Lightweight / Ninja Pro"
++        );
++    }
++    take.t = (now - take.stamp).min(n(&take.json, "duration", 24.));
++    if let Some(w) = world.as_mut() {
++        for i in 0..take.actors.len() {
++            let a = &take.actors[i];
++            let id = a.id;
++            w.0.configure_cinema_actor(
++                sim::ClientId(id),
++                n(&take.json, "health", 30.) as i32,
++                &a.name,
++                true,
++            );
++            if let Some(ps) = w.0.player(sim::ClientId(id)) {
++                if ps.health <= 0 && !take.seen[id as usize] {
++                    diag::info!(
++                        Launch,
++                        "CINEMA DEATH t={:.3} id={} name={} origin={:?}",
++                        take.t,
++                        id,
++                        a.name,
++                        ps.origin
++                    );
++                    take.seen[id as usize] = true;
++                    if id == 0 {
++                        take.death = Some(take.t);
++                    }
++                }
++            }
++        }
++        let tick = (take.t * 4.) as i32;
++        if take.last_log != tick {
++            take.last_log = tick;
++            for id in 0..take.actors.len() as u32 {
++                if let Some(ps) = w.0.player(sim::ClientId(id)) {
++                    diag::info!(
++                        Launch,
++                        "CINEMA STATE t={:.2} id={} p={:?} hp={} ads={:.2} weapon={} angles={:?} sprint={} speed={:.1} shots={} spread={:.2}",
++                        take.t,
++                        id,
++                        ps.origin,
++                        ps.health,
++                        ps.f_weapon_pos_frac,
++                        ps.weapon,
++                        ps.viewangles,
++                        ps.pm_flags & 0x4000 != 0,
++                        Vec3::from_array(ps.velocity).truncate().length(),
++                        ps.weapon_shot_count,
++                        ps.aim_spread_scale
++                    );
++                }
++            }
++        }
++    }
++    let flying = take
++        .death
++        .is_some_and(|d| take.t > d + n(&take.json, "cut_delay", 1.1));
++    sim_camera.enabled = !flying;
++    sim_camera.freeze_fly = true;
++    ui.0 = !flying;
++    if let Some(events) = take.json["events"].as_array() {
++        let mut next = take.cue;
++        while next < events.len() && n(&events[next], "at", 0.) <= take.t {
++            if let Some(id) = events[next]["respawn_actor"].as_u64() {
++                if world
++                    .as_ref()
++                    .and_then(|w| w.0.player(sim::ClientId(id as u32)))
++                    .is_some_and(|ps| ps.health <= 0)
++                {
++                    if let Ok(origin) =
++                        serde_json::from_value::<[f32; 3]>(events[next]["origin"].clone())
++                    {
++                        let request_id = ids.allocate();
++                        let _ = inbox.push(
++                            sim::ClientId(id as u32),
++                            sim::ClientAction::ForceSpawn {
++                                request_id,
++                                pick: sim::SpawnPick::At {
++                                    origin,
++                                    yaw: n(&events[next], "yaw", 90.),
++                                },
++                            },
++                        );
++                        diag::info!(
++                            Launch,
++                            "CINEMA REINFORCEMENT t={:.3} id={id} origin={origin:?}",
++                            take.t
++                        );
++                    }
++                }
++            }
++            if let Some(s) = events[next]["command"].as_str() {
++                queue.push_line(s);
++            }
++            next += 1;
++        }
++        take.cue = next;
++    }
++    if take.stage == 3 && take.t >= n(&take.json, "duration", 24.) {
++        take.stage = 4;
++        diag::info!(
++            Launch,
++            "CINEMA COMPLETE: deaths={:?}; F9 replays; saving scene JSON reloads",
++            take.seen
++        );
++    }
++}
++// Monotone Hermite paths preserve velocity through waypoints without leaving
++// the narrow ramp. Reversals ease through zero instead of teleporting velocity.
++fn position(a: &Actor, t: f32) -> Vec3 {
++    let rows = &a.route;
++    let point = |i: usize| Vec3::new(rows[i][1], rows[i][2], rows[i][3]);
++    let slope = |i: usize, j: usize| (point(j) - point(i)) / (rows[j][0] - rows[i][0]).max(0.001);
++    let tangent = |i: usize| {
++        if i == 0 {
++            return slope(0, 1.min(rows.len() - 1));
++        }
++        if i + 1 == rows.len() {
++            return Vec3::ZERO;
++        }
++        let before = slope(i - 1, i);
++        let after = slope(i, i + 1);
++        Vec3::from_array(std::array::from_fn(|k| {
++            if before[k] * after[k] <= 0. {
++                0.
++            } else {
++                2. * before[k] * after[k] / (before[k] + after[k])
++            }
++        }))
++    };
++    for i in 0..rows.len() - 1 {
++        if t < rows[i + 1][0] {
++            let h = rows[i + 1][0] - rows[i][0];
++            let u = ((t - rows[i][0]) / h).clamp(0., 1.);
++            return point(i) * (2. * u * u * u - 3. * u * u + 1.)
++                + tangent(i) * h * (u * u * u - 2. * u * u + u)
++                + point(i + 1) * (-2. * u * u * u + 3. * u * u)
++                + tangent(i + 1) * h * (u * u * u - u * u);
++        }
++    }
++    point(rows.len() - 1)
++}
++fn delta_angle(a: f32, b: f32) -> f32 {
++    (b - a + 180.).rem_euclid(360.) - 180.
++}
++fn input(
++    a: &Actor,
++    t: f32,
++    dt: f32,
++    ps: &PlayerState,
++    world: &net::AuthorityWorld,
++    presented: &net::PresentedSnapshot,
++    motion: &mut AimMotion,
++) -> ScriptedBotCommand {
++    let origin = Vec3::from_array(ps.origin);
++    let goal = position(a, t);
++    let err = goal - origin;
++    let mut angles = [0., a.yaw, 0.];
++    let mut turn_speed = 780.;
++    let mut response = 32.;
++    let mut along = position(a, t + 0.45) - origin;
++    if a.id == 0 {
++        along.y = along.y.max(60.);
++    }
++    if along.truncate().length() > 12. {
++        angles[1] = along.y.atan2(along.x).to_degrees();
++    }
++    for cue in &a.aim {
++        if t < n(cue, "start", 0.) || t >= n(cue, "end", 999.) {
++            continue;
++        }
++        turn_speed = n(cue, "turn_speed", 780.);
++        response = n(cue, "response", 32.);
++        let mut target = if let Some(id) = cue["actor"].as_u64() {
++            let target_ps = if a.id == 0 {
++                presented.player(sim::ClientId(id as u32))
++            } else {
++                world.0.player(sim::ClientId(id as u32))
++            };
++            target_ps.map(|s| {
++                Vec3::from_array(s.origin)
++                    + Vec3::Z * n(cue, "height", 48.).min((s.view_height_current - 8.).max(24.))
++            })
++        } else {
++            serde_json::from_value::<[f32; 3]>(cue["point"].clone())
++                .ok()
++                .map(Vec3::from_array)
++        };
++        if let Some(p) = target.as_mut() {
++            p.x += n(cue, "offset_x", 0.);
++            p.y += n(cue, "offset_y", 0.);
++            p.z += n(cue, "offset_z", 0.);
++        }
++        if let Some(target) = target {
++            let d = target - origin - Vec3::Z * ps.view_height_current;
++            angles = [
++                (-d.z).atan2(d.truncate().length()).to_degrees(),
++                d.y.atan2(d.x).to_degrees(),
++                0.,
++            ];
++        }
++    }
++    let buttons = a
++        .buttons
++        .iter()
++        .filter(|b| t >= b[0] && t < b[1])
++        .fold(0u32, |bits, b| bits | b[2] as u32);
++    let travel_yaw = along.y.atan2(along.x).to_degrees();
++    if a.id != 0
++        && buttons & playerstate_iw4::buttons::SPRINT != 0
++        && buttons & playerstate_iw4::buttons::ADS == 0
++    {
++        angles = [0., travel_yaw, 0.];
++        turn_speed = 440.;
++        response = 22.;
++    }
++    // High sensitivity, not cinematic float: fast flicks with finite acceleration,
++    // slight overshoot and hand corrections. Never snap to the target on a shot.
++    if !motion.initialized {
++        motion.angles = ps.viewangles;
++        motion.initialized = true;
++    }
++    let phase = a.id as f32 * 1.7;
++    angles[0] += 0.12 * (t * 9.3 + phase).sin() + 0.045 * (t * 31.1 + phase).sin();
++    angles[1] += 0.20 * (t * 7.1 + phase).sin() + 0.07 * (t * 27.3 + phase).sin();
++    let steps = (dt.clamp(0.001, 0.08) * 240.).ceil() as usize;
++    let h = dt.clamp(0.001, 0.08) / steps as f32;
++    for _ in 0..steps {
++        for k in 0..2 {
++            let error = delta_angle(motion.angles[k], angles[k]);
++            let acceleration = (response * response * error
++                - 2. * 0.78 * response * motion.velocity[k])
++                .clamp(-14000., 14000.);
++            motion.velocity[k] =
++                (motion.velocity[k] + acceleration * h).clamp(-turn_speed, turn_speed);
++            motion.angles[k] += motion.velocity[k] * h;
++        }
++    }
++    angles = motion.angles;
++    let yaw = angles[1].to_radians();
++    let feed_forward = (position(a, t + 0.04) - position(a, (t - 0.04).max(0.))) / 0.08;
++    let mut velocity = feed_forward.truncate() + err.truncate() * 2.8;
++    if a.id == 0 {
++        velocity.y = velocity.y.max(0.);
++    }
++    let forward = velocity.dot(Vec2::new(yaw.cos(), yaw.sin()));
++    let right = velocity.dot(Vec2::new(yaw.sin(), -yaw.cos()));
++    let mut out = ScriptedBotCommand {
++        viewangles: angles,
++        forwardmove: (forward / 190. * 127.).clamp(-127., 127.) as i8,
++        rightmove: (right / 190. * 127.).clamp(-127., 127.) as i8,
++        buttons: 0,
++    };
++    for b in &a.buttons {
++        if t >= b[0] && t < b[1] {
++            out.buttons |= b[2] as u32;
++        }
++    }
++    if out.buttons & playerstate_iw4::buttons::SPRINT != 0
++        && out.buttons & playerstate_iw4::buttons::ADS == 0
++    {
++        // Finish the flick back onto the narrow ramp before pushing full forward.
++        if delta_angle(angles[1], if a.id == 0 { 90. } else { travel_yaw }).abs() < 20. {
++            out.forwardmove = 127;
++            out.rightmove = out.rightmove.clamp(-28, 28);
++        } else {
++            out.buttons &= !playerstate_iw4::buttons::SPRINT;
++        }
++    }
++    if a.id == 0 && out.buttons & playerstate_iw4::buttons::ATTACK != 0 {
++        let pitch = out.viewangles[0].to_radians();
++        let yaw = out.viewangles[1].to_radians();
++        let start = origin + Vec3::Z * ps.view_height_current;
++        let dir = Vec3::new(
++            pitch.cos() * yaw.cos(),
++            pitch.cos() * yaw.sin(),
++            -pitch.sin(),
++        );
++        let hit = world.0.bullet_trace(
++            sim::BulletTraceQuery {
++                start: start.to_array(),
++                end: (start + dir * 2000.).to_array(),
++                mask: sim::MASK_SHOT,
++                ignore: Some(sim::ClientId(0)),
++                ignore_hit: None,
++                ignore_model: None,
++            },
++            None,
++        );
++        diag::info!(
++            Launch,
++            "CINEMA AIM t={t:.3} ads={:.2} hit={hit:?}",
++            ps.f_weapon_pos_frac
++        );
++    }
++    if ps.health <= 0 {
++        out.forwardmove = 0;
++        out.rightmove = 0;
++        out.buttons = 0;
++    }
++    out
++}
++fn control(
++    time: Res<Time<Real>>,
++    take: Res<Take>,
++    world: Option<Res<net::AuthorityWorld>>,
++    prediction: Res<net::ClientPredictionState>,
++    presented: Res<net::PresentedSnapshot>,
++    mut template: ResMut<net::ClientCmdTemplate>,
++    mut look: ResMut<net::LookState>,
++    mut bots: ResMut<ScriptedBotCommands>,
++    mut controllers: ResMut<Controllers>,
++) {
++    let Some(world) = world else {
++        return;
++    };
++    bots.0.clear();
++    if take.stage < 2 {
++        controllers.0.clear();
++        return;
++    }
++    for a in &take.actors {
++        let ps = if a.id == 0 {
++            prediction.0.predicted_local()
++        } else {
++            world.0.player(sim::ClientId(a.id))
++        };
++        let Some(ps) = ps else {
++            continue;
++        };
++        let mut out = input(
++            a,
++            if take.stage == 2 { 0. } else { take.t },
++            time.delta_secs(),
++            ps,
++            &world,
++            &presented,
++            controllers.0.entry(a.id).or_default(),
++        );
++        if take.stage == 2 || take.stage == 4 {
++            out.forwardmove = 0;
++            out.rightmove = 0;
++            out.buttons = 0;
++        }
++        if a.id == 0 {
++            template.cmd.angles = net::look_angles_from_degrees(std::array::from_fn(|k| {
++                out.viewangles[k] - ps.delta_angles[k]
++            }));
++            look.angles = template.cmd.angles;
++            template.cmd.forwardmove = out.forwardmove;
++            template.cmd.rightmove = out.rightmove;
++            template.cmd.buttons = out.buttons;
++        } else {
++            bots.0.insert(a.id, out);
++        }
++    }
++}
++fn camera(
++    take: Res<Take>,
++    presented: Res<net::PresentedSnapshot>,
++    world: Option<Res<net::AuthorityWorld>>,
++    mut cameras: Query<&mut Transform, With<FlyCamera>>,
++    mut lenses: Query<&mut Projection, With<FpvLens>>,
++) {
++    let Some(death) = take.death else {
++        return;
++    };
++    let elapsed = take.t - death - n(&take.json, "cut_delay", 1.1);
++    if elapsed <= 0. {
++        return;
++    }
++    if let Some(cuts) = take.json["camera_cuts"].as_array() {
++        if let Some(shot) = cuts.iter().rev().find(|shot| take.t >= n(shot, "at", 0.)) {
++            if let (Ok(eye), Ok(focus)) = (
++                serde_json::from_value::<[f32; 3]>(shot["eye"].clone()),
++                serde_json::from_value::<[f32; 3]>(shot["focus"].clone()),
++            ) {
++                let mut eye = Vec3::from_array(eye);
++                let mut focus = Vec3::from_array(focus);
++                if let Some(id) = shot["follow_actor"].as_u64() {
++                    if let Some(ps) = presented.player(sim::ClientId(id as u32)) {
++                        let origin = Vec3::from_array(ps.origin);
++                        eye += origin;
++                        focus += origin;
++                    }
++                }
++                for mut c in &mut cameras {
++                    *c = Transform::from_translation(eye).looking_at(focus, Vec3::Z);
++                }
++                for mut p in &mut lenses {
++                    if let Projection::Perspective(lens) = &mut *p {
++                        lens.fov = n(shot, "fov", 58.).to_radians();
++                    }
++                }
++                return;
++            }
++        }
++    }
++    let Some(world) = world else {
++        return;
++    };
++    let Some(chief) = world.0.player(sim::ClientId(8)) else {
++        return;
++    };
++    let target = Vec3::from_array(chief.origin) + Vec3::Z * 45.;
++    let close = Vec3::new(513., 680., 180.);
++    let wide = if take.json.get("vehicle").is_some() {
++        Vec3::new(-100., -30., 350.)
++    } else {
++        Vec3::new(-450., -650., 700.)
++    };
++    let u = (elapsed
++        / if take.json.get("vehicle").is_some() {
++            4.
++        } else {
++            9.
++        })
++    .clamp(0., 1.);
++    let u = u * u * (3. - 2. * u);
++    let eye = close.lerp(wide, u);
++    let focus = target.lerp(Vec3::new(510., 600., 30.), u);
++    for mut c in &mut cameras {
++        *c = Transform::from_translation(eye).looking_at(focus, Vec3::Z);
++    }
++    for mut p in &mut lenses {
++        if let Projection::Perspective(lens) = &mut *p {
++            lens.fov = (55. + u * 15.).to_radians();
++        }
++    }
++}
++fn hide_gun(take: Res<Take>, mut plan: ResMut<FpvDrawPlan>) {
++    if take
++        .death
++        .is_some_and(|d| take.t > d + n(&take.json, "cut_delay", 1.1))
++    {
++        plan.drawgun = Some(0);
++        plan.visible = false;
++    }
++}
+diff --git a/crates/bootstrap/src/cinema_battlefield.rs b/crates/bootstrap/src/cinema_battlefield.rs
+new file mode 100644
+index 0000000..1b7e964
+--- /dev/null
++++ b/crates/bootstrap/src/cinema_battlefield.rs
+@@ -0,0 +1,735 @@
++use super::cinema2::{Take, n};
++use bevy::{
++    audio::{PlaybackSettings, Volume},
++    prelude::*,
++};
++use render_frontend::prepare::scene::world::WorldScriptModelInstance;
++use render_fx::{
++    HostFxSystem, PreparedFxCatalog, PreparedFxElemInfos, PreparedTracers, TracerWorld,
++};
++
++#[derive(Component)]
++struct Prop {
++    kind: String,
++    slot: usize,
++}
++struct Projectile {
++    kind: String,
++    actor: u32,
++    p: Vec3,
++    v: Vec3,
++    born: f32,
++    fuse: f32,
++    alive: bool,
++}
++#[derive(Resource, Default)]
++struct Battle {
++    stamp: f32,
++    cue: usize,
++    projectiles: Vec<Projectile>,
++    last_vehicle: Option<Vec3>,
++    splattered: bool,
++    announced: bool,
++    sounds: std::collections::BTreeMap<String, Handle<audio::PcmAudio>>,
++    deaths: [bool; 16],
++    rocket_victims: Vec<(u32, f32)>,
++    rocket_blast: Option<(f32, Vec3)>,
++    ear: Vec3,
++    right: Vec3,
++}
++#[derive(Component)]
++struct TakeSound;
++
++pub(super) fn install(app: &mut App) {
++    app.init_resource::<Battle>();
++    app.add_systems(
++        Update,
++        simulate
++            .in_set(frame::ClientSet::Input)
++            .after(super::cinema2::drive),
++    );
++    app.add_systems(
++        Update,
++        props
++            .in_set(frame::ClientSet::Present)
++            .before(frame::RenderSet::Anim),
++    );
++}
++fn vec(v: &serde_json::Value) -> Option<Vec3> {
++    serde_json::from_value::<[f32; 3]>(v.clone())
++        .ok()
++        .map(Vec3::from_array)
++}
++// Monotone cubic route: continuous velocity through turns, no sideways snaps.
++fn path(rows: &serde_json::Value, t: f32) -> Vec3 {
++    let Some(rows) = rows.as_array() else {
++        return Vec3::ZERO;
++    };
++    if rows.is_empty() {
++        return Vec3::ZERO;
++    }
++    let point = |i: usize| {
++        Vec3::new(
++            rows[i][1].as_f64().unwrap() as f32,
++            rows[i][2].as_f64().unwrap() as f32,
++            rows[i][3].as_f64().unwrap() as f32,
++        )
++    };
++    let at = |i: usize| rows[i][0].as_f64().unwrap() as f32;
++    let slope = |i: usize, j: usize| (point(j) - point(i)) / (at(j) - at(i)).max(0.001);
++    let tangent = |i: usize| {
++        if i == 0 {
++            return slope(0, 1.min(rows.len() - 1));
++        }
++        if i + 1 == rows.len() {
++            return Vec3::ZERO;
++        }
++        let a = slope(i - 1, i);
++        let b = slope(i, i + 1);
++        Vec3::from_array(std::array::from_fn(|k| {
++            if a[k] * b[k] <= 0. {
++                0.
++            } else {
++                2. * a[k] * b[k] / (a[k] + b[k])
++            }
++        }))
++    };
++    for i in 0..rows.len() - 1 {
++        if t < at(i + 1) {
++            let h = at(i + 1) - at(i);
++            let u = ((t - at(i)) / h).clamp(0., 1.);
++            return point(i) * (2. * u * u * u - 3. * u * u + 1.)
++                + tangent(i) * h * (u * u * u - 2. * u * u + u)
++                + point(i + 1) * (-2. * u * u * u + 3. * u * u)
++                + tangent(i + 1) * h * (u * u * u - u * u);
++        }
++    }
++    point(rows.len() - 1)
++}
++
++fn sound(
++    commands: &mut Commands,
++    pcm: &mut Assets<audio::PcmAudio>,
++    battle: &Battle,
++    name: &str,
++    volume: f32,
++    origin: Option<Vec3>,
++) {
++    if let Some(handle) = battle.sounds.get(name) {
++        if [
++            "warthog-engine",
++            "warthog-splat",
++            "halo-splat",
++            "chief-death",
++            "triple-kill",
++        ]
++        .contains(&name)
++        {
++            diag::info!(Launch, "CINEMA SOUND play {name} volume={volume}");
++        }
++        let handle = if let Some(origin) = origin {
++            let Some(source) = pcm.get(handle) else {
++                return;
++            };
++            let clip = source.with_live_pan();
++            let d = origin - battle.ear;
++            let pan = d.normalize_or_zero().dot(battle.right).clamp(-0.9, 0.9);
++            let gain = (700. / (700. + d.length())).powf(0.6);
++            if let Some(live) = clip.live_pan() {
++                live.set((1. - pan).sqrt() * gain, (1. + pan).sqrt() * gain);
++            }
++            pcm.add(clip)
++        } else {
++            handle.clone()
++        };
++        commands.spawn((
++            TakeSound,
++            AudioPlayer(handle),
++            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)),
++        ));
++    }
++}
++
++fn beam(
++    tracers: &mut TracerWorld,
++    catalog: &PreparedTracers,
++    host: &HostFxSystem,
++    start: Vec3,
++    end: Vec3,
++    color: [f32; 4],
++    speed: f32,
++    width: f32,
++    length: f32,
++) {
++    let Some(material) = catalog
++        .0
++        .defs()
++        .find(|d| d.name == "pistol")
++        .and_then(|d| d.material.bound_index())
++    else {
++        return;
++    };
++    let d = end - start;
++    let dist = d.length();
++    if dist < 1. {
++        return;
++    }
++    tracers.pool.alloc(fx::LocalEntitySlot {
++        le_type: fx::LE_MOVING_TRACER,
++        pos_tr_time: host.0.msec_now,
++        pos_tr_type: fx::LE_TR_LINEAR,
++        pos_tr_duration: 0,
++        pos_tr_delta: (d / dist * speed).to_array(),
++        pos_tr_base: start.to_array(),
++        end_time: host.0.msec_now + ((dist / speed * 1000.) as i32).max(90),
++        material: Some(material),
++        tracer_clip_dist: dist,
++        beam_length: length,
++        beam_width: width,
++        screw_dist: 0.,
++        screw_radius: 0.,
++        colors: [color; 5],
++        own_shot: false,
++    });
++}
++fn burst(
++    host: &mut HostFxSystem,
++    catalog: &PreparedFxCatalog,
++    infos: &mut PreparedFxElemInfos,
++    p: Vec3,
++) {
++    let name = catalog
++        .0
++        .names()
++        .find(|s| s.contains("explosion") && (s.contains("grenade") || s.contains("rpg")))
++        .or_else(|| catalog.0.names().find(|s| s.contains("explosion")))
++        .map(str::to_owned);
++    if let Some(name) = name {
++        render_fx::combat::try_play_weapon_fx_at_origin(
++            &mut host.0,
++            &catalog.0,
++            &mut infos.0,
++            Some(asset_game::FxName::engine(&name)),
++            p.to_array(),
++            render_fx::combat::IDENTITY_AXIS,
++            &mut 0,
++            None,
++        );
++    }
++}
++#[allow(clippy::too_many_arguments)]
++fn simulate(
++    mut commands: Commands,
++    time: Res<Time<Real>>,
++    take: Res<Take>,
++    mut battle: ResMut<Battle>,
++    mut world: Option<ResMut<net::AuthorityWorld>>,
++    clock: Res<net::AuthorityClock>,
++    mut pcm: ResMut<Assets<audio::PcmAudio>>,
++    mut tracers: ResMut<TracerWorld>,
++    catalog: Option<Res<PreparedTracers>>,
++    mut host: ResMut<HostFxSystem>,
++    fx_catalog: Option<Res<PreparedFxCatalog>>,
++    mut infos: ResMut<PreparedFxElemInfos>,
++    mut promotion: ResMut<hud::PendingSplash>,
++    mut native_sound: MessageWriter<audio::AliasCommand>,
++    voices: Query<Entity, With<TakeSound>>,
++    cameras: Query<&Transform, With<render_frontend::prepare::scene::camera::FlyCamera>>,
++) {
++    let Some(w) = world.as_mut() else {
++        return;
++    };
++    if take.stage < 3 {
++        return;
++    }
++    if battle.stamp != take.stamp {
++        for e in &voices {
++            commands.entity(e).despawn();
++        }
++        promotion.reset_cinematic();
++        battle.stamp = take.stamp;
++        battle.cue = 0;
++        battle.projectiles.clear();
++        battle.last_vehicle = None;
++        battle.splattered = false;
++        battle.announced = false;
++        battle.deaths = [false; 16];
++        battle.rocket_victims.clear();
++        battle.rocket_blast = None;
++        if battle.sounds.is_empty() {
++            if let Some(pack) = std::env::var_os("IW4L_CHIEF_PACK") {
++                for name in [
++                    "triple-kill",
++                    "warthog-engine",
++                    "warthog-impact",
++                    "warthog-splat",
++                    "halo-splat",
++                    "chief-death",
++                    "halo-vehicle-impact",
++                    "rocket-fire",
++                    "plasma-fire",
++                    "plasma-explosion",
++                    "plasma-fuse",
++                ] {
++                    let file = std::path::Path::new(&pack).join(format!("{name}.wav"));
++                    match std::fs::read(&file)
++                        .ok()
++                        .and_then(|bytes| audio::decode_audio_bytes(&bytes))
++                    {
++                        Some(audio) => {
++                            battle.sounds.insert(name.into(), pcm.add(audio));
++                        }
++                        None => {
++                            diag::warn!(Launch, "CINEMA SOUND failed to decode {}", file.display())
++                        }
++                    }
++                }
++            }
++        }
++        diag::info!(
++            Launch,
++            "CINEMA BATTLEFIELD: native props, projectiles and {} local sounds",
++            battle.sounds.len()
++        );
++    }
++    if let Ok(camera) = cameras.single() {
++        battle.ear = camera.translation;
++        battle.right = camera.rotation * Vec3::X;
++    }
++    let t = take.t;
++    let dt = time.delta_secs().clamp(0., 0.06);
++    let events = take.json["battle"].as_array();
++    if let Some(events) = events {
++        while battle.cue < events.len() && n(&events[battle.cue], "at", 0.) <= t {
++            let e = &events[battle.cue];
++            battle.cue += 1;
++            let kind = e["kind"].as_str().unwrap_or("");
++            let actor = e["actor"].as_u64().unwrap_or(8) as u32;
++            let ps = w.0.player(sim::ClientId(actor));
++            let mut start = ps
++                .map(|p| {
++                    Vec3::from_array(p.origin) + Vec3::Z * if kind == "grenade" { 60. } else { 46. }
++                })
++                .unwrap_or(Vec3::ZERO);
++            if let Some(p) = vec(&e["origin"]) {
++                start = p;
++            }
++            let mut target = vec(&e["point"])
++                .or_else(|| {
++                    e["target"].as_u64().and_then(|id| {
++                        w.0.player(sim::ClientId(id as u32))
++                            .map(|p| Vec3::from_array(p.origin) + Vec3::Z * 44.)
++                    })
++                })
++                .unwrap_or(start + Vec3::X * 600.);
++            target += vec(&e["offset"]).unwrap_or(Vec3::ZERO);
++            if ["plasma", "grenade", "rocket"].contains(&kind) && ps.is_some_and(|p| p.health > 0) {
++                let flight = n(
++                    e,
++                    "flight",
++                    if kind == "grenade" {
++                        0.85
++                    } else {
++                        (target - start).length() / 1150.
++                    },
++                );
++                let mut v = (target - start) / flight.max(0.1);
++                if kind == "grenade" {
++                    v.z += 400. * flight;
++                }
++                start += v.normalize_or_zero() * 18.;
++                battle.projectiles.push(Projectile {
++                    kind: kind.into(),
++                    actor,
++                    p: start,
++                    v,
++                    born: t,
++                    fuse: n(e, "fuse", if kind == "grenade" { 1.8 } else { 3. }),
++                    alive: true,
++                });
++                sound(
++                    &mut commands,
++                    &mut pcm,
++                    &battle,
++                    if kind == "plasma" {
++                        "plasma-fire"
++                    } else if kind == "rocket" {
++                        "rocket-fire"
++                    } else {
++                        "plasma-fuse"
++                    },
++                    if kind == "grenade" {
++                        0.3
++                    } else if kind == "rocket" {
++                        0.75
++                    } else {
++                        0.12
++                    },
++                    Some(start),
++                );
++                diag::info!(
++                    Launch,
++                    "CINEMA PROJECTILE t={t:0.2} kind={kind} actor={actor} from={:?} to={:?}",
++                    start,
++                    target
++                );
++            } else if kind == "native_rocket" {
++                // Native RPG attack owns animation, missile collision and damage.
++                // This cue adds CE audio and bounds the announcer's kill window.
++                battle.rocket_blast = Some((t + n(e, "flight", 0.55), target));
++                sound(
++                    &mut commands,
++                    &mut pcm,
++                    &battle,
++                    "rocket-fire",
++                    0.9,
++                    Some(start),
++                );
++                diag::info!(
++                    Launch,
++                    "CINEMA NATIVE ROCKET t={t:.3} actor={actor} target={target:?}"
++                );
++            } else if kind == "near_miss" {
++                if let Some(c) = catalog.as_ref() {
++                    beam(
++                        &mut tracers,
++                        c,
++                        &host,
++                        start,
++                        target,
++                        [1., 0.86, 0.5, 1.],
++                        9000.,
++                        1.7,
++                        95.,
++                    );
++                }
++                sound(
++                    &mut commands,
++                    &mut pcm,
++                    &battle,
++                    "rocket-fire",
++                    0.12,
++                    Some(start),
++                );
++            } else if kind == "engine" {
++                sound(
++                    &mut commands,
++                    &mut pcm,
++                    &battle,
++                    "warthog-engine",
++                    n(e, "volume", 0.65),
++                    None,
++                );
++            }
++        }
++    }
++    if let Some(vehicle) = take.json.get("vehicle") {
++        let p = path(&vehicle["route"], t);
++        let previous = battle.last_vehicle.unwrap_or(p);
++        if t >= n(vehicle, "start", 5.) && !battle.splattered {
++            if let Some(ps) = w.0.player(sim::ClientId(0)) {
++                let q = Vec3::from_array(ps.origin) + Vec3::Z * 25.;
++                let d = p - previous;
++                let u = ((q - previous).dot(d) / d.length_squared().max(0.01)).clamp(0., 1.);
++                let closest = previous + d * u;
++                if (q - closest).truncate().length() < n(vehicle, "radius", 90.)
++                    && (q.z - closest.z).abs() < 85.
++                {
++                    if w.0.cinema_contact_damage(
++                        sim::Tick(clock.tick),
++                        sim::ClientId(15),
++                        sim::ClientId(0),
++                        p.to_array(),
++                        500,
++                    ) {
++                        battle.splattered = true;
++                        promotion.cinematic("promotion", 2);
++                        native_sound.write(audio::AliasCommand::Play(audio::PlayAlias {
++                            namespace: asset_core::AssetNamespace::Iw4,
++                            alias: "mp_level_up".into(),
++                            fallback: None,
++                            origin_inches: None,
++                            snd_ent: Some(audio::SND_ENT_LOCAL),
++                        }));
++                        diag::info!(Launch, "CINEMA PROMOTION impact t={t:.3} sound=mp_level_up");
++                        sound(&mut commands, &mut pcm, &battle, "halo-splat", 1.6, None);
++                        sound(&mut commands, &mut pcm, &battle, "chief-death", 1.2, None);
++                        sound(&mut commands, &mut pcm, &battle, "warthog-splat", 1.8, None);
++                        sound(
++                            &mut commands,
++                            &mut pcm,
++                            &battle,
++                            "warthog-impact",
++                            1.,
++                            Some(p),
++                        );
++                        diag::info!(Launch, "CINEMA SPLATTER t={t:0.3} vehicle={p:?}");
++                    }
++                }
++            }
++        }
++        battle.last_vehicle = Some(p);
++    }
++    let mut explosions = Vec::new();
++    for shot in &mut battle.projectiles {
++        if !shot.alive {
++            continue;
++        }
++        let next = shot.p + shot.v * dt;
++        let hit = w.0.bullet_trace(
++            sim::BulletTraceQuery {
++                start: shot.p.to_array(),
++                end: next.to_array(),
++                mask: sim::MASK_SHOT,
++                ignore: Some(sim::ClientId(shot.actor)),
++                ignore_hit: None,
++                ignore_model: None,
++            },
++            None,
++        );
++        let mut impact = false;
++        match hit {
++            sim::TraceOutcome::Hit { end, collider, .. } => {
++                shot.p = Vec3::from_array(end);
++                impact = true;
++                if shot.kind == "plasma" {
++                    if let sim::ColliderId::Player { client, .. } = collider {
++                        w.0.cinema_contact_damage(
++                            sim::Tick(clock.tick),
++                            sim::ClientId(shot.actor),
++                            client,
++                            end,
++                            18,
++                        );
++                    }
++                }
++                if shot.kind == "grenade" {
++                    shot.v = Vec3::ZERO;
++                }
++            }
++            sim::TraceOutcome::StartSolid { .. } => {
++                impact = true;
++                shot.v = Vec3::ZERO;
++            }
++            _ => shot.p = next,
++        }
++        if shot.kind == "grenade" && shot.v.length_squared() > 0. {
++            shot.v.z -= 800. * dt;
++        }
++        if let Some(c) = catalog.as_ref() {
++            let color = if shot.kind == "plasma" {
++                [0.15, 1., 0.18, 1.]
++            } else if shot.kind == "grenade" {
++                [0.15, 0.42, 1., 1.]
++            } else {
++                [1., 0.65, 0.12, 1.]
++            };
++            let end = shot.p
++                + if shot.v.length() > 1. {
++                    shot.v.normalize_or_zero() * 140.
++                } else {
++                    Vec3::Z * 30.
++                };
++            beam(
++                &mut tracers,
++                c,
++                &host,
++                shot.p,
++                end,
++                color,
++                1200.,
++                if shot.kind == "grenade" { 7. } else { 6. },
++                25.,
++            );
++        }
++        if t - shot.born > shot.fuse || (impact && shot.kind != "grenade") {
++            shot.alive = false;
++            if shot.kind != "plasma" {
++                explosions.push((shot.actor, shot.p, shot.kind.clone()));
++            }
++        }
++    }
++    for (actor, p, kind) in explosions {
++        w.0.cinema_blast(
++            sim::Tick(clock.tick),
++            sim::ClientId(actor),
++            p.to_array(),
++            if kind == "rocket" { 220. } else { 165. },
++            150.,
++        );
++        if let Some(c) = fx_catalog.as_ref() {
++            burst(&mut host, c, &mut infos, p);
++        }
++        sound(
++            &mut commands,
++            &mut pcm,
++            &battle,
++            "plasma-explosion",
++            0.8,
++            Some(p),
++        );
++        if kind == "rocket" && actor == 13 {
++            battle.rocket_blast = Some((t, p));
++        }
++        if let Some(c) = catalog.as_ref() {
++            for i in 0..18 {
++                let a = i as f32 * 2.399;
++                let d = Vec3::new(a.cos(), a.sin(), 0.25 + (i % 4) as f32 * 0.2);
++                beam(
++                    &mut tracers,
++                    c,
++                    &host,
++                    p,
++                    p + d * 130.,
++                    if kind == "grenade" {
++                        [0.18, 0.45, 1., 1.]
++                    } else {
++                        [1., 0.5, 0.08, 1.]
++                    },
++                    380.,
++                    3.,
++                    25.,
++                );
++            }
++        }
++        diag::info!(
++            Launch,
++            "CINEMA EXPLOSION t={t:0.3} actor={actor} kind={kind} origin={p:?}"
++        );
++    }
++    for id in 3..8 {
++        if let Some(ps) = w.0.player(sim::ClientId(id)) {
++            if ps.health <= 0 && !battle.deaths[id as usize] {
++                battle.deaths[id as usize] = true;
++                if battle.rocket_blast.is_some_and(|(at, origin)| {
++                    (t - at).abs() < 0.75 && origin.distance(Vec3::from_array(ps.origin)) < 260.
++                }) {
++                    battle.rocket_victims.push((id, t));
++                }
++            }
++        }
++    }
++    if !battle.announced
++        && battle
++            .rocket_victims
++            .iter()
++            .filter(|(_, at)| t - *at < 1.5)
++            .count()
++            >= 3
++    {
++        battle.announced = true;
++        sound(&mut commands, &mut pcm, &battle, "triple-kill", 1.25, None);
++        diag::info!(
++            Launch,
++            "CINEMA TRIPLE KILL t={t:0.3} victims={:?}",
++            battle.rocket_victims
++        );
++    }
++}
++fn props(
++    mut commands: Commands,
++    take: Res<Take>,
++    battle: Res<Battle>,
++    mut existing: Query<(
++        &Prop,
++        &mut WorldScriptModelInstance,
++        &mut Transform,
++        &mut Visibility,
++    )>,
++    catalog: Option<Res<asset_world::MapXModelSceneCatalog>>,
++) {
++    let Some(catalog) = catalog else {
++        return;
++    };
++    if take.stage < 2 {
++        return;
++    }
++    if existing.is_empty() {
++        for (slot, kind) in std::iter::once((0, "warthog"))
++            .chain((0..20).map(|i| (i, "plasma_grenade")))
++            .chain((0..6).map(|i| (i, "rocket_projectile")))
++        {
++            let name = format!("halo_ce_{kind}");
++            if catalog.get_name(&name).is_none() {
++                continue;
++            }
++            let transform = Transform::from_translation(Vec3::new(0., 0., -10000.));
++            commands.spawn((
++                Prop {
++                    kind: kind.into(),
++                    slot,
++                },
++                transform,
++                Visibility::Hidden,
++                WorldScriptModelInstance {
++                    id: asset_world::ScriptModelId::from_source_ordinal(
++                        0x20000000
++                            + slot as u32
++                            + if kind == "warthog" {
++                                0
++                            } else if kind == "plasma_grenade" {
++                                100
++                            } else {
++                                200
++                            },
++                    ),
++                    authority_owner: None,
++                    current_model: asset_world::MapXModelAssetKey(name.clone()),
++                    transform,
++                    lighting_origin: [0.; 3],
++                    dobj_state: xmodel_runtime::DObjSemanticState::bind_pose(name, 1, 1),
++                    metadata: asset_world::ScriptModelMetadata {
++                        gameobject: "local_cinema_prop".into(),
++                        ..default()
++                    },
++                    gentity_number: None,
++                },
++            ));
++        }
++    }
++    for (prop, mut owner, mut xf, mut visible) in &mut existing {
++        *visible = Visibility::Hidden;
++        if prop.kind == "warthog" {
++            if let Some(v) = take.json.get("vehicle") {
++                let p = path(&v["route"], take.t);
++                let facing_t = take.t.min(n(v, "stop", 8.) - 0.04);
++                let d = path(&v["route"], facing_t + 0.02)
++                    - path(&v["route"], (facing_t - 0.02).max(0.));
++                let yaw = if d.truncate().length() > 0.01 {
++                    d.y.atan2(d.x)
++                } else {
++                    -std::f32::consts::FRAC_PI_2
++                };
++                let pitch = (-d.z).atan2(d.truncate().length().max(0.1));
++                *xf = Transform::from_translation(p).with_rotation(Quat::from_euler(
++                    EulerRot::ZYX,
++                    yaw,
++                    pitch,
++                    0.,
++                ));
++                if take.t >= n(v, "draw_start", 0.) {
++                    *visible = Visibility::Inherited;
++                }
++            }
++        } else {
++            let kind = if prop.kind == "plasma_grenade" {
++                "grenade"
++            } else {
++                "rocket"
++            };
++            if let Some(s) = battle
++                .projectiles
++                .iter()
++                .filter(|s| s.kind == kind && s.alive)
++                .nth(prop.slot)
++            {
++                *xf = Transform::from_translation(s.p)
++                    .with_rotation(Quat::from_rotation_z(take.t * 7.))
++                    .with_scale(Vec3::splat(if kind == "grenade" { 1.7 } else { 1. }));
++                *visible = Visibility::Inherited;
++            }
++        }
++        owner.transform = *xf;
++        owner.lighting_origin = xf.translation.to_array();
++    }
++}

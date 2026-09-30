@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chief on Rust · prototype</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}</script>
+</head>
+<body>
+  <canvas id="game" aria-label="First person game"></canvas>
+  <div id="hud">
+    <header><div class="brand">CHIEF <span>ON</span> RUST</div><div class="tag" id="mode">LOADING</div></header>
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div><div id="hitmarker">×</div>
+    <div class="bottom-left"><small>LOCAL PROOF OF CONCEPT</small><strong id="location">Training yard</strong><span id="asset-status">Loading assets…</span></div>
+    <div class="bottom-right"><small id="weapon-name">BURST RIFLE · PROXY</small><div><b id="ammo">36</b><span id="reserve"> / 108</span></div><span id="weapon-state">3 ROUND BURST</span></div>
+    <div id="score">TARGETS <b id="kills">0</b><span>HITS <b id="hits">0</b></span></div>
+    <div id="toast" role="status"></div><div id="position"></div>
+  </div>
+  <main id="menu">
+    <section class="card">
+      <div class="eyebrow">CROSSOVER LAB / 001</div>
+      <h1>One Spartan.<br>One dusty yard.</h1>
+      <p id="summary">A playable asset bridge for Master Chief, a burst rifle, and IW4L’s Rust map export.</p>
+      <div id="asset-list"></div>
+      <button id="play" disabled>Loading… <span>↗</span></button>
+      <button id="director-open" disabled>Scene director <span>▶</span></button>
+      <div class="controls"><span><b>W A S D</b> move</span><span><b>MOUSE</b> look / fire</span><span><b>RMB</b> zoom</span><span><b>SPACE</b> jump</span><span><b>R</b> reload</span><span><b>V</b> third person</span><span><b>F</b> fly</span><span><b>G</b> next spawn</span><span><b>1 / 2 / 3</b> pistol / sniper / rocket</span><span><b>ESC</b> pause</span></div>
+      <p class="footnote" id="notice">The included yard and models are procedural placeholders. Import local game assets to test the actual crossover.</p>
+    </section>
+  </main>
+  <aside id="director" hidden aria-label="Scene director">
+    <div class="director-heading"><strong>SCENE DIRECTOR</strong><button id="scene-collapse" title="Collapse editor">−</button><button id="director-close" title="Return to prototype">×</button></div>
+    <div class="director-edit">
+      <p>Cast, choreograph, and shoot repeatable takes.</p>
+      <div class="cast-controls">
+        <label>Red team<input id="red-count" type="number" min="0" max="64" value="3"></label>
+        <label>Blue team<input id="blue-count" type="number" min="0" max="64" value="3"></label>
+        <label>Weapon<select id="cast-weapon"><option value="pistol">CE pistol</option><option value="sniper">CE sniper</option><option value="rocket">CE rocket</option></select></label>
+      </div>
+      <button id="scene-build">Build example scene</button>
+      <details><summary>Edit scene JSON</summary><textarea id="scene-json" spellcheck="false" aria-label="Scene JSON"></textarea><button id="scene-apply">Apply JSON</button></details>
+      <div class="director-row"><label class="file-button">Load JSON<input id="scene-file" type="file" accept=".json,application/json"></label><button id="scene-save">Save JSON</button><button id="scene-bookmark" title="Store the current camera at the playhead time">Camera keyframe</button></div>
+    </div>
+    <div class="director-row"><button id="scene-restart">↶ Restart</button><button id="scene-play">Play</button><button id="scene-record">Record from start</button></div>
+    <input id="scene-scrub" type="range" min="0" max="16" value="0" step="0.01" aria-label="Scene playhead">
+    <div id="scene-time">0.00 / 16.00s</div><p id="scene-message" role="status"></p>
+    <p class="director-edit footnote">Scripted actors follow authored paths. Shots are visual; deaths are explicit cues. Video includes the canvas and generated shot audio. The local build uses imported models when configured.</p>
+  </aside>
+  <script type="module" src="game.js"></script>
+</body>
+</html>

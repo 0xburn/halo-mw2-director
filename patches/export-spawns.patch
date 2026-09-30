@@ -1,0 +1,28 @@
+--- a/crates/bootstrap/src/launch.rs
++++ b/crates/bootstrap/src/launch.rs
+@@ -184,6 +184,13 @@
+         assets::MatchLoadOutcome::Ready(prepared) => prepared,
+         assets::MatchLoadOutcome::Canceled => fatal("export-gltf: map walk canceled"),
+     };
++    let bridge_spawns = prepared.prepared_map.spawns.iter().map(|spawn| {
++        serde_json::json!({
++            "classname": spawn.classname,
++            "position": [spawn.origin[0] * 0.0254, spawn.origin[2] * 0.0254, -spawn.origin[1] * 0.0254],
++            "yaw": (spawn.angles[1] - 90.0).to_radians(),
++        })
++    }).collect::<Vec<_>>();
+     let summary = assets::export_prepared_world_gltf(
+         &artifacts,
+         &found.zone_name,
+@@ -191,6 +198,11 @@
+         &prepared.materials,
+     )
+     .unwrap_or_else(|error| fatal(&format!("export-gltf: {error}")));
++    let spawn_file = summary.scene.with_file_name("spawns.json");
++    let spawn_bytes = serde_json::to_vec_pretty(&bridge_spawns)
++        .unwrap_or_else(|error| fatal(&format!("serialize spawn metadata: {error}")));
++    std::fs::write(&spawn_file, spawn_bytes)
++        .unwrap_or_else(|error| fatal(&format!("write spawn metadata: {error}")));
+     diag::announce_stdout(&summary.scene.display().to_string());
+     diag::announce_stdout(&summary.report_line());
+ }
