@@ -9,6 +9,9 @@ The included 24-second take chains two Intervention quickscopes, a blue Chief re
 ## What works
 
 - Native IW4L/Metal playback, checked on an Apple M1 Pro.
+- [Native graphics improvements](docs/NATIVE_GRAPHICS.md): texture filtering, edge anti-aliasing, contact shading and animated Halo water.
+- [Autonomous 4v4 bot matches](docs/BOT_MATCHES.md): MW2 quickscopers versus jumping Spartans, with cycling first-person spectator views.
+- Experimental [Battle Creek import](docs/HALO_MAPS.md): Halo CE geometry, textures, collision and spawn points with native MW2 movement and weapons.
 - A 16-slot authored cast with MW2 soldiers and imported blue CE Chief meshes using MW2 rigs.
 - Native controller-driven sprinting, jumping, aiming, shots and deaths; cinematic damage protections keep the intended cast alive until their beats.
 - Warthog/driver presentation, CE sounds, plasma effects and native RPG damage.
@@ -68,7 +71,7 @@ An older browser storyboard is also included: `python3 manage.py serve`. With no
 ## Current limits
 
 - Native scene v2 supports 16 cast slots, not 32. Slots 0–7 use MW2 soldiers and 8–15 use the imported Chief. Arbitrary per-actor models are not implemented.
-- Rust is the rehearsed map. Other installed MW2 maps appear in the catalog as unverified. Halo map playback is not implemented here.
+- Rust is the rehearsed cinematic map. Battle Creek has a separate native playtest launcher; Halo map shaders and gameplay features remain incomplete. Other installed maps require native verification.
 - The Warthog follows an authored route with a baked driver pose, not general vehicle physics.
 - Camera cuts currently activate after the local player's death. Fight choreography, stunt protection and some punchline effects remain specific to the take.
 - The video is captured in real time. Cold-load/frame-timing variance can affect shots; the scene verifier reports actual outcomes.

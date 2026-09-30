@@ -66,3 +66,7 @@ python3 scripts/build_battlefield_take.py
 ```
 
 Press F9 to replay. `python3 scripts/verify_battlefield_take.py` checks actual outcomes from the latest completed native take. Other maps and model templates require a native compatibility rehearsal; a successful file check alone is insufficient.
+
+## Play a Halo map
+
+See [the Battle Creek importer](HALO_MAPS.md) for extracting `beavercreek.map`, preparing its local pack, and starting a native controllable session with `scripts/native_halo_map.sh`. The map launcher does not run the Rust cinematic.

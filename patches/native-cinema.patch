@@ -64,6 +64,24 @@ index d6ea6a8..aeeb69d 100644
      pub fn vehicle_compass(&self) -> impl Iterator<Item = (&str, &[String; 2], [i32; 2])> {
          self.vehicle_compass
              .iter()
+diff --git a/crates/asset_material/src/material_catalog.rs b/crates/asset_material/src/material_catalog.rs
+index 890c46a..cbf1a66 100644
+--- a/crates/asset_material/src/material_catalog.rs
++++ b/crates/asset_material/src/material_catalog.rs
+@@ -3010,6 +3010,13 @@ impl MaterialCatalog {
+ /// Read-only questions about a finished population. They are here and not on
+ /// the build catalog because the answers do not change any more.
+ impl MaterialDefinitions {
++    /// Append an already-linked technique for a local runtime asset import.
++    pub fn install_local_technique_set(&mut self, facts: TechniqueSetFacts) -> usize {
++        let index = self.techsets.len();
++        self.techsets.push(facts);
++        index
++    }
++
+     pub fn leftover_iw5_arg_top(&self) -> Option<String> {
+         self.leftover_iw5_arg_ranked(0)
+     }
 diff --git a/crates/asset_model/src/body_catalog.rs b/crates/asset_model/src/body_catalog.rs
 index be3f56f..38f76e1 100644
 --- a/crates/asset_model/src/body_catalog.rs
@@ -149,6 +167,19 @@ index 27193d0..e8cdb2f 100644
      pub fn materials_resolved(&self) -> bool {
          self.resolved
      }
+diff --git a/crates/asset_world/src/world_draw.rs b/crates/asset_world/src/world_draw.rs
+index d4e6ffa..5622124 100644
+--- a/crates/asset_world/src/world_draw.rs
++++ b/crates/asset_world/src/world_draw.rs
+@@ -940,7 +940,7 @@ struct BatchBuilder {
+ }
+ 
+ #[allow(clippy::too_many_arguments)]
+-pub(crate) fn make_material_batches(
++pub fn make_material_batches(
+     positions: &[[f32; 3]],
+     normals: &[[f32; 3]],
+     tangents: &[[f32; 4]],
 diff --git a/crates/assets/src/gltf_export.rs b/crates/assets/src/gltf_export.rs
 index f39c9aa..531a8cf 100644
 --- a/crates/assets/src/gltf_export.rs
@@ -213,18 +244,19 @@ index f39c9aa..531a8cf 100644
 +        "weights":s.vert_skin.iter().map(|v|v.weights).collect::<Vec<_>>()})
 +}
 diff --git a/crates/assets/src/lib.rs b/crates/assets/src/lib.rs
-index 41a38e8..7fae840 100644
+index 41a38e8..b46d014 100644
 --- a/crates/assets/src/lib.rs
 +++ b/crates/assets/src/lib.rs
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,8 @@
  mod artifact_cache;
  mod asset_graph;
  mod gltf_export;
 +mod local_chief;
++mod local_map;
  mod iwd;
  mod lane;
  mod lane_capability;
-@@ -25,7 +26,7 @@ pub use asset_graph::{
+@@ -25,7 +27,7 @@ pub use asset_graph::{
      resolve_after_absorb,
  };
  pub use fastfile_iw4::GlyphCapture;
@@ -233,22 +265,47 @@ index 41a38e8..7fae840 100644
  pub use iwd::{IwdSoundIndex, NamespaceSoundIwd, NamespaceTree, NamespaceTrees};
  pub use lane::{CommonCensus, LANE_GAPS, LaneGap, LoadedWorld, ZoneLane, lane};
  pub use lane_capability::{LaneStatus, PreparedCapability, lane_status};
+@@ -53,3 +55,6 @@ pub mod image_handles;
+ 
+ mod script_sources;
+ pub use script_sources::{ScriptSources, ScriptTable};
++
++mod model_portraits;
++pub use model_portraits::player_portraits;
+diff --git a/crates/assets/src/prepared.rs b/crates/assets/src/prepared.rs
+index 08e6e48..ea0e38b 100644
+--- a/crates/assets/src/prepared.rs
++++ b/crates/assets/src/prepared.rs
+@@ -69,7 +69,10 @@ pub struct MatchType10SoundHints(pub Vec<String>);
+ pub struct PreparedFpvMeshes(pub FpvMeshCatalog);
+ 
+ #[derive(Clone, Debug, Default, Resource)]
+-pub struct PreparedBodies(pub std::sync::Arc<BodyMeshCatalog>);
++pub struct PreparedBodies(
++    pub std::sync::Arc<BodyMeshCatalog>,
++    pub [Option<bevy::prelude::Image>; 2],
++);
+ 
+ #[derive(Clone, Debug, Default, Resource)]
+ pub struct PreparedWorldWeapons(pub WorldWeaponCatalog);
 diff --git a/crates/assets/src/session_load/resident_map.rs b/crates/assets/src/session_load/resident_map.rs
-index 1a74850..6cd788b 100644
+index 1a74850..fc18c0c 100644
 --- a/crates/assets/src/session_load/resident_map.rs
 +++ b/crates/assets/src/session_load/resident_map.rs
-@@ -62,6 +62,7 @@ pub async fn load_prepared_match(
+@@ -62,6 +62,8 @@ pub async fn load_prepared_match(
              diag::info!(World, "{line}");
              prepared.report.push(line);
              prepared.report.extend(progress.timing_report());
-+            if let Err(error)=crate::local_chief::install(&mut prepared) {diag::error!(World,"local Chief: {error}");return MatchLoadOutcome::Canceled;}
++            if let Err(error)=crate::local_map::install(&mut prepared) {diag::error!(World,"local map: {error}");return MatchLoadOutcome::Canceled;}
++    if let Err(error)=crate::local_chief::install(&mut prepared) {diag::error!(World,"local Chief: {error}");return MatchLoadOutcome::Canceled;}
              return MatchLoadOutcome::Ready(prepared);
          }
      }
-@@ -99,5 +100,6 @@ pub async fn load_prepared_match(
+@@ -99,5 +101,7 @@ pub async fn load_prepared_match(
          });
      }
      prepared.report.extend(progress.timing_report());
++    if let Err(error)=crate::local_map::install(&mut prepared) {diag::error!(World,"local map: {error}");return MatchLoadOutcome::Canceled;}
 +    if let Err(error)=crate::local_chief::install(&mut prepared) {diag::error!(World,"local Chief: {error}");return MatchLoadOutcome::Canceled;}
      MatchLoadOutcome::Ready(prepared)
  }
@@ -310,32 +367,242 @@ index d068f22..0170031 100644
      diag::announce_stdout(&summary.report_line());
  }
 diff --git a/crates/bootstrap/src/lib.rs b/crates/bootstrap/src/lib.rs
-index 688b3ef..43e0ae2 100644
+index 688b3ef..b98740f 100644
 --- a/crates/bootstrap/src/lib.rs
 +++ b/crates/bootstrap/src/lib.rs
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,10 @@
  pub mod args;
  pub mod bench;
  mod frame_owner;
 +mod cinema;
 +mod cinema2;
 +mod cinema_battlefield;
++mod bot_match;
  mod launch;
  mod plugins;
  
 diff --git a/crates/bootstrap/src/plugins.rs b/crates/bootstrap/src/plugins.rs
-index 5ee7516..7b05d55 100644
+index 5ee7516..67532dd 100644
 --- a/crates/bootstrap/src/plugins.rs
 +++ b/crates/bootstrap/src/plugins.rs
-@@ -44,6 +44,8 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
+@@ -30,7 +30,7 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
+         RuntimeRole::Client => NetPlugin::client(),
+         RuntimeRole::Replay => NetPlugin::replay(),
+     };
+-    if crate::bench::enabled() {
++    if crate::bench::enabled() || std::env::var_os("IW4L_BOT_MATCH").is_some() {
+         // Unfocused benchmarks must not inherit the window runner's 60 Hz sleep.
+         app.insert_resource(bevy::winit::WinitSettings::continuous());
+     }
+@@ -44,6 +44,9 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
          .add_plugins(RenderPlugin)
          .add_plugins(SessionPlugin);
  
 +    crate::cinema::install(app);
++    crate::bot_match::install(app);
 +
      app.edit_schedule(Update, |schedule| {
          schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
      });
+diff --git a/crates/bots/src/controller.rs b/crates/bots/src/controller.rs
+index 4711d40..bdc4d56 100644
+--- a/crates/bots/src/controller.rs
++++ b/crates/bots/src/controller.rs
+@@ -38,6 +38,10 @@ const STUCK_TICKS: u32 = 40;
+ 
+ #[derive(Clone, Debug)]
+ pub struct HostController {
++    quickscope: bool,
++    spartan: bool,
++    grounded: bool,
++    next_jump: u32,
+     aggression: f32,
+     self_preserve: f32,
+     memory: Memory,
+@@ -74,6 +78,10 @@ impl HostController {
+         let aggression = ((seed & 0xff) as f32) / 255.0;
+         let self_preserve = (((seed >> 8) & 0xff) as f32) / 255.0;
+         Self {
++            quickscope: false,
++            spartan: false,
++            grounded: true,
++            next_jump: 0,
+             aggression,
+             self_preserve,
+             memory: Memory::default(),
+@@ -115,6 +123,14 @@ impl HostController {
+         self.decision
+     }
+ 
++    pub fn set_quickscope(&mut self, ads_fraction: f32, spartan: bool, grounded: bool, speed: f32) {
++        self.quickscope = true;
++        self.spartan = spartan;
++        self.grounded = grounded;
++        self.motor
++            .set_quickscope(ads_fraction, spartan, grounded, speed);
++    }
++
+     pub fn route_stats(&self) -> nav::RouteStats {
+         self.route_work.stats()
+     }
+@@ -253,7 +269,25 @@ impl HostController {
+                 }
+             }
+         }
+-        let cmd = self.motor.drive(obs, &self.intent, dt_ms);
++        let mut cmd = self.motor.drive(obs, &self.intent, dt_ms);
++        if self.spartan {
++            cmd.buttons &= !(playerstate_iw4::buttons::SPRINT | playerstate_iw4::buttons::CROUCH);
++            // React to a visible opponent, with headroom checked before launch.
++            // The movement simulator owns the arc; no poses or kills are authored.
++            if self.grounded && !obs.seen.is_empty() && obs.tick >= self.next_jump {
++                let p = obs.self_state.origin;
++                world.enter(QuerySubsystem::Execution);
++                if world
++                    .hull_trace([p[0], p[1], p[2] + 2.0], [p[0], p[1], p[2] + 88.0])
++                    .is_ok_and(|hit| !hit.startsolid && hit.fraction >= 1.0)
++                {
++                    cmd.buttons |= playerstate_iw4::buttons::JUMP;
++                    self.next_jump = obs.tick + 32 + (obs.self_state.id.0 * 7 + obs.tick) % 17;
++                } else {
++                    self.next_jump = obs.tick + 10;
++                }
++            }
++        }
+         self.report = self.motor.report(obs, &self.intent, &cmd);
+         self.last_cmd = cmd;
+         cmd
+@@ -413,7 +447,7 @@ impl HostController {
+         // Standing clearance also fits a crouched hull. Require a shot at crouched eye height.
+         if self.intent.fire
+             && self.intent.move_mode == MoveMode::Hold
+-            && obs.self_state.health < 60
++            && obs.self_state.health < if self.quickscope { 18 } else { 60 }
+             && let Some(target) = self.pick_fight_target(obs)
+             && world.walk_hull(obs.self_state.origin, obs.self_state.origin)
+                 == Ok(WalkSample::Clear)
+@@ -566,10 +600,14 @@ impl HostController {
+ 
+     fn pick_task(&mut self, obs: &BotObservation, objective: Option<ModeObjective>) -> Task {
+         let seen = self.memory.currently_seen().next().is_some();
+-        let fresh = self
+-            .memory
+-            .last_seen()
+-            .any(|c| obs.tick.saturating_sub(c.seen_tick) <= LAST_SEEN_FRESH_TICKS);
++        let fresh = self.memory.last_seen().any(|c| {
++            obs.tick.saturating_sub(c.seen_tick)
++                <= if self.quickscope {
++                    80
++                } else {
++                    LAST_SEEN_FRESH_TICKS
++                }
++        });
+         let mut scores = [
+             10.0,
+             if fresh { 55.0 } else { -1.0 },
+@@ -677,7 +715,7 @@ impl HostController {
+         nav: Option<&NavGraph>,
+         astar_budget: &mut u32,
+     ) -> BotIntent {
+-        let Some(goal) = self.ensure_roam(obs, nav) else {
++        let Some(goal) = self.ensure_roam(obs, nav, world) else {
+             return BotIntent::default();
+         };
+         let (move_mode, path, move_goal) =
+@@ -692,7 +730,11 @@ impl HostController {
+             self.committed.clear();
+         }
+         BotIntent {
+-            look_at: Some([goal[0], goal[1], obs.eye()[2]]),
++            look_at: Some([
++                move_goal.unwrap_or(goal)[0],
++                move_goal.unwrap_or(goal)[1],
++                obs.eye()[2],
++            ]),
+             move_goal,
+             desired_range: None,
+             move_mode,
+@@ -701,7 +743,12 @@ impl HostController {
+         }
+     }
+ 
+-    fn ensure_roam(&mut self, obs: &BotObservation, nav: Option<&NavGraph>) -> Option<[f32; 3]> {
++    fn ensure_roam(
++        &mut self,
++        obs: &BotObservation,
++        nav: Option<&NavGraph>,
++        world: &mut impl WorldQuery,
++    ) -> Option<[f32; 3]> {
+         if let Some(goal) = self.roam
+             && dist2(obs.self_state.origin, goal) > 64.0 * 64.0
+         {
+@@ -713,7 +760,27 @@ impl HostController {
+         self.roam_gen = self.roam_gen.saturating_add(1);
+         let salt = obs.self_state.id.0 ^ self.roam_gen;
+         let next = if let Some(graph) = nav.filter(|graph| !graph.is_empty()) {
+-            nav::roam_node(graph, obs.self_state.origin, salt)
++            if self.quickscope {
++                let candidates = nav::arena_roam_candidates(graph, obs.self_state.origin, salt);
++                let mut selected = None;
++                for goal in candidates.iter().take(4) {
++                    let start = [goal[0], goal[1], goal[2] + 64.0];
++                    let end = [goal[0], goal[1], goal[2] + 512.0];
++                    match world.hull_trace(start, end) {
++                        Ok(hit) if !hit.startsolid && hit.fraction >= 1.0 => {
++                            selected = Some(*goal);
++                            break;
++                        }
++                        Err(_) => break,
++                        _ => {}
++                    }
++                }
++                selected
++                    .or_else(|| candidates.first().copied())
++                    .or_else(|| nav::roam_node(graph, obs.self_state.origin, salt))
++            } else {
++                nav::roam_node(graph, obs.self_state.origin, salt)
++            }
+         } else {
+             let ang = (salt as f32) * 0.37;
+             Some([
+@@ -862,7 +929,12 @@ impl HostController {
+ 
+     fn wounded(&self, obs: &BotObservation) -> bool {
+         obs.self_state.health > 0
+-            && (obs.self_state.health as f32) <= 20.0 + 20.0 * self.self_preserve
++            && (obs.self_state.health as f32)
++                <= if self.quickscope {
++                    6.0 + 6.0 * self.self_preserve
++                } else {
++                    20.0 + 20.0 * self.self_preserve
++                }
+     }
+ 
+     fn hold_range(&self, obs: &BotObservation) -> f32 {
+@@ -1084,7 +1156,8 @@ impl HostController {
+     ) -> BotIntent {
+         let (goal, use_button, look) = match kind {
+             SeekKind::LastSeen => {
+-                let Some(last) = self.memory.last_seen().next().copied() else {
++                let Some(last) = self.memory.last_seen().max_by_key(|c| c.seen_tick).copied()
++                else {
+                     return BotIntent::default();
+                 };
+                 (last.origin, false, last.origin)
+@@ -1151,7 +1224,12 @@ impl HostController {
+         let (move_mode, path, move_goal) =
+             self.route(obs.self_state.origin, goal, world, nav, astar_budget);
+         BotIntent {
+-            look_at: Some(look),
++            look_at: Some(if self.quickscope && matches!(kind, SeekKind::LastSeen) {
++                let next = move_goal.unwrap_or(look);
++                [next[0], next[1], obs.eye()[2]]
++            } else {
++                look
++            }),
+             move_goal,
+             desired_range: None,
+             move_mode,
 diff --git a/crates/bots/src/lib.rs b/crates/bots/src/lib.rs
 index 582554e..1b546bd 100644
 --- a/crates/bots/src/lib.rs
@@ -349,8 +616,264 @@ index 582554e..1b546bd 100644
  };
  pub use sensor::{observe, observe_focused};
  pub use task::{ActionStage, Decision, SwitchReason, Task, TaskKind};
+diff --git a/crates/bots/src/motor.rs b/crates/bots/src/motor.rs
+index 83fc267..d82efd4 100644
+--- a/crates/bots/src/motor.rs
++++ b/crates/bots/src/motor.rs
+@@ -24,6 +24,14 @@ pub struct Motor {
+     acquire_yaw: f32,
+     last_look: Option<[f32; 3]>,
+     armed: Option<sim::LifeSequence>,
++    quickscope: bool,
++    ads_fraction: f32,
++    mobile_accuracy: bool,
++    planted: bool,
++    scope_since: Option<u32>,
++    scope_rest_until: u32,
++    previous_clip: i32,
++    attack_down: bool,
+ }
+ 
+ impl Motor {
+@@ -42,9 +50,24 @@ impl Motor {
+             acquire_yaw: 0.0,
+             last_look: None,
+             armed: None,
++            quickscope: false,
++            ads_fraction: 0.0,
++            mobile_accuracy: false,
++            planted: false,
++            scope_since: None,
++            scope_rest_until: 0,
++            previous_clip: -1,
++            attack_down: false,
+         }
+     }
+ 
++    pub fn set_quickscope(&mut self, ads_fraction: f32, spartan: bool, grounded: bool, speed: f32) {
++        self.quickscope = true;
++        self.ads_fraction = ads_fraction;
++        self.mobile_accuracy = spartan;
++        self.planted = grounded && speed < 12.0;
++    }
++
+     pub fn report(&self, obs: &BotObservation, intent: &BotIntent, cmd: &UserCmd) -> MotorReport {
+         if matches!(intent.move_mode, MoveMode::Mantle | MoveMode::Ladder) {
+             return MotorReport::Unsupported;
+@@ -83,6 +106,12 @@ impl Motor {
+             self.yaw = obs.self_state.viewangles[1];
+             self.pitch = angle_subtract(obs.self_state.viewangles[0], 0.0);
+             self.armed = Some(obs.self_state.life_sequence);
++            self.scope_since = None;
++            self.scope_rest_until = obs.tick;
++            self.previous_clip = obs.self_state.ammo_clip;
++            self.attack_down = false;
++            self.yaw_vel = 0.0;
++            self.pitch_vel = 0.0;
+         }
+         let dt = dt_ms.max(1) as f32;
+         if let Some(at) = intent.look_at {
+@@ -95,16 +124,21 @@ impl Motor {
+             self.last_look = Some(at);
+             self.acquire_yaw *= 0.85_f32.powf(dt / 16.0);
+             let desire = look_angles(obs.eye(), at);
++            let error_scale = if self.quickscope { 0.06 } else { 1.0 };
+             let (yaw, yaw_vel) = slew_yaw(
+                 self.yaw,
+-                desire[1] + self.err_yaw + self.acquire_yaw,
++                desire[1] + self.err_yaw * error_scale + self.acquire_yaw,
+                 self.yaw_vel,
+                 dt,
+             );
+             self.yaw = yaw;
+             self.yaw_vel = yaw_vel;
+-            let (pitch, pitch_vel) =
+-                slew_pitch(self.pitch, desire[0] + self.err_pitch, self.pitch_vel, dt);
++            let (pitch, pitch_vel) = slew_pitch(
++                self.pitch,
++                desire[0] + self.err_pitch * error_scale,
++                self.pitch_vel,
++                dt,
++            );
+             self.pitch = pitch;
+             self.pitch_vel = pitch_vel;
+         } else {
+@@ -144,7 +178,7 @@ impl Motor {
+             weapon_mapped: weapon,
+             ..UserCmd::default()
+         };
+-        if intent.fire && self.weapon_on_target(obs, intent) {
++        if !self.quickscope && intent.fire && self.weapon_on_target(obs, intent) {
+             cmd.buttons |= buttons::ATTACK;
+         }
+         if intent.use_button {
+@@ -168,16 +202,63 @@ impl Motor {
+         if intent.crouch {
+             cmd.buttons |= buttons::CROUCH;
+         }
++        if self.quickscope {
++            self.quickscope_command(obs, intent, &mut cmd);
++        }
+         cmd
+     }
+ 
++    fn quickscope_command(&mut self, obs: &BotObservation, intent: &BotIntent, cmd: &mut UserCmd) {
++        let me = &obs.self_state;
++        // Observe the actual magazine, not a planned shot time. Bolt actions
++        // need a release between shots, including failed/cancelled attempts.
++        if me.ammo_clip < self.previous_clip {
++            self.scope_since = None;
++            self.scope_rest_until = obs.tick + 10;
++        }
++        self.previous_clip = me.ammo_clip;
++        let available = !intent.reload && intent.weapon.is_none() && me.ammo_clip > 0;
++        if !available || !intent.fire {
++            self.scope_since = None;
++        } else if self.scope_since.is_none()
++            && obs.tick >= self.scope_rest_until
++            && me.weapon_action == crate::WeaponAction::Ready
++        {
++            self.scope_since = Some(obs.tick);
++        }
++        let was_attack_down = self.attack_down;
++        self.attack_down = false;
++        if let Some(since) = self.scope_since {
++            if obs.tick.saturating_sub(since) > 12 {
++                self.scope_since = None;
++                self.scope_rest_until = obs.tick + 6;
++                return;
++            }
++            cmd.buttons &= !(buttons::SPRINT | buttons::CROUCH);
++            cmd.buttons |= buttons::ADS;
++            if !self.mobile_accuracy {
++                cmd.forwardmove = 0;
++                cmd.rightmove = 0;
++            }
++            if (self.mobile_accuracy || self.planted)
++                && self.ads_fraction >= 0.9
++                && !was_attack_down
++                && me.weapon_action == crate::WeaponAction::Ready
++                && self.weapon_on_target(obs, intent)
++            {
++                cmd.buttons |= buttons::ATTACK;
++                self.attack_down = true;
++            }
++        }
++    }
++
+     fn weapon_on_target(&self, obs: &BotObservation, intent: &BotIntent) -> bool {
+         let Some(at) = intent.look_at else {
+             return false;
+         };
+         let desire = look_angles(obs.eye(), at);
+-        angle_subtract(desire[1], self.yaw).abs() <= FIRE_CONE_DEG
+-            && (desire[0] - self.pitch).abs() <= FIRE_CONE_DEG
++        let cone = if self.quickscope { 0.65 } else { FIRE_CONE_DEG };
++        angle_subtract(desire[1], self.yaw).abs() <= cone && (desire[0] - self.pitch).abs() <= cone
+     }
+ }
+ 
+diff --git a/crates/bots/src/nav.rs b/crates/bots/src/nav.rs
+index 59a807b..f578f03 100644
+--- a/crates/bots/src/nav.rs
++++ b/crates/bots/src/nav.rs
+@@ -7,7 +7,7 @@ use sim::{ClientId, SimBrush};
+ use crate::observation::ModeObjective;
+ use crate::query::{HullTrace, QueryResult, QuerySubsystem, SightSample, WalkSample, WorldQuery};
+ 
+-pub const NAV_SCHEMA: u32 = 8;
++pub const NAV_SCHEMA: u32 = 9;
+ pub const GRID_IN: f32 = 48.0;
+ pub const SNAP_IN: f32 = 256.0;
+ pub const STEP_Z_IN: f32 = 18.0;
+@@ -260,7 +260,13 @@ pub fn brush_bounds(brushes: &[SimBrush]) -> Option<([f32; 3], [f32; 3])> {
+ }
+ 
+ pub fn playable_bounds(brushes: &[SimBrush], seeds: &[[f32; 3]]) -> Option<([f32; 3], [f32; 3])> {
+-    let (bmins, bmaxs) = brush_bounds(brushes)?;
++    // Imported maps may use triangle collision exclusively. Spawn coverage is
++    // a bounded search region too; the bake still validates every floor/hull.
++    let (bmins, bmaxs) = match brush_bounds(brushes) {
++        Some(bounds) => bounds,
++        None if !seeds.is_empty() => ([f32::MIN; 3], [f32::MAX; 3]),
++        None => return None,
++    };
+     if seeds.is_empty() {
+         return Some((bmins, bmaxs));
+     }
+@@ -783,6 +789,70 @@ pub fn nearest_within(graph: &NavGraph, feet: [f32; 3], max_dist: f32) -> Option
+     best.map(|(id, _)| id)
+ }
+ 
++pub fn arena_roam_candidates(graph: &NavGraph, from: [f32; 3], salt: u32) -> Vec<[f32; 3]> {
++    let Some(start) = nearest_within(graph, from, SNAP_IN) else {
++        return Vec::new();
++    };
++    let mut reachable = vec![false; graph.component_links.len()];
++    let mut pending = vec![graph.component[start as usize]];
++    while let Some(c) = pending.pop() {
++        if reachable[c as usize] {
++            continue;
++        }
++        reachable[c as usize] = true;
++        pending.extend_from_slice(&graph.component_links[c as usize]);
++    }
++    let mut lo = [f32::INFINITY; 3];
++    let mut hi = [f32::NEG_INFINITY; 3];
++    for p in &graph.nodes {
++        for k in 0..3 {
++            lo[k] = lo[k].min(p[k]);
++            hi[k] = hi[k].max(p[k]);
++        }
++    }
++    let mut floors = BTreeMap::<i32, usize>::new();
++    for p in &graph.nodes {
++        *floors.entry((p[2] / 24.0).round() as i32).or_default() += 1;
++    }
++    let main_floor = floors
++        .into_iter()
++        .max_by_key(|(_, count)| *count)
++        .map_or(from[2], |(z, _)| z as f32 * 24.0);
++    let angle = salt.wrapping_mul(3) as f32 * 2.399963;
++    let radius = ((hi[0] - lo[0]).min(hi[1] - lo[1]) * 0.2).clamp(160.0, 440.0);
++    let goal = [
++        (lo[0] + hi[0]) * 0.5 + angle.cos() * radius,
++        (lo[1] + hi[1]) * 0.5 + angle.sin() * radius,
++        from[2],
++    ];
++    let mut candidates: Vec<_> = graph
++        .nodes
++        .iter()
++        .enumerate()
++        .filter(|(i, p)| {
++            reachable[graph.component[*i] as usize]
++                && dist_xy(**p, from) > 160.0
++                && p[2] >= main_floor - 24.0
++                && p[2] <= main_floor + 96.0
++        })
++        .map(|(_, p)| *p)
++        .collect();
++    candidates.sort_by(|a, b| {
++        let score = |p: [f32; 3]| dist_xy(p, goal) + (p[2] - from[2]).abs() * 0.3;
++        score(*a).total_cmp(&score(*b))
++    });
++    let mut spread: Vec<[f32; 3]> = Vec::new();
++    for p in candidates {
++        if spread.iter().all(|q| dist_xy(*q, p) > 96.0) {
++            spread.push(p);
++        }
++        if spread.len() == 12 {
++            break;
++        }
++    }
++    spread
++}
++
+ pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]> {
+     let start = nearest_within(graph, from, SNAP_IN)?;
+     let comp = graph.component[start as usize];
 diff --git a/crates/bots/src/plugin.rs b/crates/bots/src/plugin.rs
-index 0fc8a28..6e42380 100644
+index 0fc8a28..ed59527 100644
 --- a/crates/bots/src/plugin.rs
 +++ b/crates/bots/src/plugin.rs
 @@ -101,6 +101,7 @@ impl Plugin for BotsPlugin {
@@ -361,7 +884,70 @@ index 0fc8a28..6e42380 100644
              .init_resource::<BotHold>()
              .init_resource::<BotTpQueue>()
              .init_resource::<BotFireQueue>()
-@@ -346,6 +347,7 @@ fn apply_bot_tp(
+@@ -164,6 +165,12 @@ fn drain_bot_add_queue(
+     for request in requests {
+         let count = request.count;
+         let added = roster.add_bots(count, &taken, request.dummy);
++        for slot in &mut roster.bots {
++            if added.contains(&slot.id) {
++                slot.quickscope = request.quickscope;
++                slot.spartan = request.spartan;
++            }
++        }
+         if added.len() < count as usize {
+             diag::warn!(
+                 Sim,
+@@ -209,7 +216,23 @@ fn boot_bots(
+         if bot.joined {
+             continue;
+         }
+-        let index = default_class_index(seed, bot.id, bot.class_picks);
++        if bot.quickscope {
++            let request_id = request_ids.allocate();
++            let _ = actions.push(
++                bot.id,
++                ClientAction::MenuResponse {
++                    request_id,
++                    menu: sim::menu_response_field("team_marinesopfor").unwrap(),
++                    response: sim::menu_response_field(if bot.spartan { "axis" } else { "allies" })
++                        .unwrap(),
++                },
++            );
++        }
++        let index = if bot.quickscope {
++            0
++        } else {
++            default_class_index(seed, bot.id, bot.class_picks)
++        };
+         let join_id = request_ids.allocate();
+         let class_request = request_ids.allocate();
+         let name_request = request_ids.allocate();
+@@ -231,11 +254,19 @@ fn boot_bots(
+                 bot.id,
+                 ClientAction::SetName {
+                     request_id: name_request,
+-                    name: entity_iw4::pack_client_state_name(if bot.brain.is_none() {
+-                        "dummy"
+-                    } else {
+-                        "bot"
+-                    }),
++                    name: entity_iw4::pack_client_state_name(&format!(
++                        "{} {}",
++                        if bot.spartan {
++                            "Spartan"
++                        } else if bot.quickscope {
++                            "Quickscoper"
++                        } else if bot.brain.is_none() {
++                            "dummy"
++                        } else {
++                            "bot"
++                        },
++                        bot.id.0
++                    )),
+                 },
+             ),
+         ];
+@@ -346,6 +377,7 @@ fn apply_bot_tp(
  
  #[derive(SystemParam)]
  struct ThinkBots<'w> {
@@ -369,35 +955,435 @@ index 0fc8a28..6e42380 100644
      clock: Res<'w, AuthorityClock>,
      world: ResMut<'w, AuthorityWorld>,
      nav: Res<'w, BotNav>,
-@@ -441,6 +443,12 @@ fn think_bots(mut p: ThinkBots) {
+@@ -395,10 +427,16 @@ fn think_bots(mut p: ThinkBots) {
+             bot.class_picked_in = Some(meta.life_sequence);
+             let index = default_class_index(seed, bot.id, bot.class_picks);
+             let request_id = p.request_ids.allocate();
+-            match p.actions.push(
+-                bot.id,
+-                ClientAction::ChooseDefaultClass { request_id, index },
+-            ) {
++            let action = if bot.quickscope {
++                let Some(weapon) = p.world.0.weapon_index_by_script_name("cheytac_mp") else {
++                    diag::warn!(Sim, "quickscope: Intervention is unavailable");
++                    continue;
++                };
++                ClientAction::GiveWeapon { request_id, weapon }
++            } else {
++                ClientAction::ChooseDefaultClass { request_id, index }
++            };
++            match p.actions.push(bot.id, action) {
+                 Ok(()) => bot.class_picks += 1,
+                 Err(error) => diag::warn!(
+                     Sim,
+@@ -407,6 +445,9 @@ fn think_bots(mut p: ThinkBots) {
+                 ),
+             }
+         }
++        if bot.quickscope {
++            p.world.0.configure_quickscope_bot(bot.id, bot.spartan);
++        }
+         let mut cmd = if p.hold.0 || bot.brain.is_none() {
+             let Some((_, ps)) = snapshot.players.iter().find(|(id, _)| *id == bot.id) else {
+                 continue;
+@@ -422,11 +463,31 @@ fn think_bots(mut p: ThinkBots) {
+             }
+         } else if let Some(brain) = bot.brain.as_mut() {
+             let mut queried = Budgeted::new(&mut p.world.0, &mut budget);
+-            let Some(obs) =
++            let Some(mut obs) =
+                 sensor::observe_focused(&snapshot, bot.id, &mut queried, brain.focus_target())
+             else {
+                 continue;
+             };
++            if bot.quickscope {
++                obs.inventory
++                    .retain(|slot| slot.class == crate::WeaponClass::Sniper);
++                let ads = snapshot
++                    .players
++                    .iter()
++                    .find(|(id, _)| *id == bot.id)
++                    .map_or(0.0, |(_, ps)| ps.f_weapon_pos_frac);
++                let grounded = snapshot
++                    .players
++                    .iter()
++                    .find(|(id, _)| *id == bot.id)
++                    .is_some_and(|(_, ps)| ps.ground_entity_num != playerstate_iw4::ENTITYNUM_NONE);
++                let speed = snapshot
++                    .players
++                    .iter()
++                    .find(|(id, _)| *id == bot.id)
++                    .map_or(0.0, |(_, ps)| ps.velocity[0].hypot(ps.velocity[1]));
++                brain.set_quickscope(ads, bot.spartan, grounded, speed);
++            }
+             let started = std::time::Instant::now();
+             let mut cmd = brain.drive_nav(
+                 &obs,
+@@ -441,6 +502,16 @@ fn think_bots(mut p: ThinkBots) {
          } else {
              continue;
          };
-+        if let Some(input)=p.scripted.0.get(&bot.id.0) {
-+            if let Some((_,ps))=snapshot.players.iter().find(|(id,_)|*id==bot.id){
-+                cmd.angles=look_angles_from_degrees(std::array::from_fn(|axis|input.viewangles[axis]-ps.delta_angles[axis]));
-+                cmd.forwardmove=input.forwardmove;cmd.rightmove=input.rightmove;cmd.buttons=input.buttons;
++        if let Some(input) = p.scripted.0.get(&bot.id.0) {
++            if let Some((_, ps)) = snapshot.players.iter().find(|(id, _)| *id == bot.id) {
++                cmd.angles = look_angles_from_degrees(std::array::from_fn(|axis| {
++                    input.viewangles[axis] - ps.delta_angles[axis]
++                }));
++                cmd.forwardmove = input.forwardmove;
++                cmd.rightmove = input.rightmove;
++                cmd.buttons = input.buttons;
 +            }
 +        }
          if fires.iter().any(|target| match target {
              BotTpTarget::All => true,
              BotTpTarget::Id(id) => *id == bot.id,
 diff --git a/crates/bots/src/roster.rs b/crates/bots/src/roster.rs
-index 717d985..3f3d092 100644
+index 717d985..866f4b9 100644
 --- a/crates/bots/src/roster.rs
 +++ b/crates/bots/src/roster.rs
-@@ -173,3 +173,11 @@ pub fn default_class_index(seed: u64, client: ClientId, pick: u32) -> u8 {
+@@ -12,6 +12,8 @@ pub struct BotAddQueue(pub Vec<BotAddRequest>);
+ pub struct BotAddRequest {
+     pub count: u32,
+     pub dummy: bool,
++    pub quickscope: bool,
++    pub spartan: bool,
+ }
+ 
+ impl BotAddQueue {
+@@ -19,6 +21,8 @@ impl BotAddQueue {
+         self.0.push(BotAddRequest {
+             count: count.max(1),
+             dummy: false,
++            quickscope: false,
++            spartan: false,
+         });
+     }
+ 
+@@ -26,6 +30,26 @@ impl BotAddQueue {
+         self.0.push(BotAddRequest {
+             count: count.max(1),
+             dummy: true,
++            quickscope: false,
++            spartan: false,
++        });
++    }
++
++    pub fn push_quickscope(&mut self, count: u32) {
++        self.0.push(BotAddRequest {
++            count: count.clamp(1, 16),
++            dummy: false,
++            quickscope: true,
++            spartan: false,
++        });
++    }
++
++    pub fn push_spartan(&mut self, count: u32) {
++        self.0.push(BotAddRequest {
++            count: count.clamp(1, 16),
++            dummy: false,
++            quickscope: true,
++            spartan: true,
+         });
+     }
+ 
+@@ -95,6 +119,8 @@ pub struct BotSlot {
+     pub joined: bool,
+     pub class_picked_in: Option<LifeSequence>,
+     pub class_picks: u32,
++    pub quickscope: bool,
++    pub spartan: bool,
+ }
+ 
+ #[derive(Resource, Debug)]
+@@ -138,6 +164,8 @@ impl BotRoster {
+             self.bots.push(BotSlot {
+                 id,
+                 brain,
++                quickscope: false,
++                spartan: false,
+                 joined: false,
+                 class_picked_in: None,
+                 class_picks: 0,
+@@ -173,3 +201,14 @@ pub fn default_class_index(seed: u64, client: ClientId, pick: u32) -> u8 {
          .wrapping_add(u64::from(pick).wrapping_mul(0x94D0_49BB_1331_11EB));
      (mix >> 33) as u8
  }
 +
 +/// Authored native movement. Values are converted to ordinary UserCmd inputs.
-+#[derive(Clone,Copy,Debug,Default)]
++#[derive(Clone, Copy, Debug, Default)]
 +pub struct ScriptedBotCommand {
-+    pub viewangles:[f32;3], pub forwardmove:i8, pub rightmove:i8, pub buttons:u32,
++    pub viewangles: [f32; 3],
++    pub forwardmove: i8,
++    pub rightmove: i8,
++    pub buttons: u32,
 +}
-+#[derive(Resource,Debug,Default)]
-+pub struct ScriptedBotCommands(pub std::collections::BTreeMap<u32,ScriptedBotCommand>);
++#[derive(Resource, Debug, Default)]
++pub struct ScriptedBotCommands(pub std::collections::BTreeMap<u32, ScriptedBotCommand>);
+diff --git a/crates/console/src/feature_dispatch/capture.rs b/crates/console/src/feature_dispatch/capture.rs
+index 565afde..ba1453c 100644
+--- a/crates/console/src/feature_dispatch/capture.rs
++++ b/crates/console/src/feature_dispatch/capture.rs
+@@ -124,7 +124,6 @@ pub(crate) fn route_capture_commands(
+     }
+ }
+ 
+-
+ fn screenshot_path(artifacts: &Path, zone: &str, name: Option<&str>) -> Result<PathBuf, String> {
+     let name = name.unwrap_or(zone);
+     let relative = Path::new(name);
+@@ -150,4 +149,3 @@ fn screenshot_path(artifacts: &Path, zone: &str, name: Option<&str>) -> Result<P
+     }
+     Ok(path)
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/echo.rs b/crates/console/src/feature_dispatch/echo.rs
+index affc814..2db990f 100644
+--- a/crates/console/src/feature_dispatch/echo.rs
++++ b/crates/console/src/feature_dispatch/echo.rs
+@@ -1,4 +1,3 @@
+-
+ use bevy::ecs::system::SystemParam;
+ use bevy::prelude::*;
+ 
+@@ -19,4 +18,3 @@ impl ConsoleEcho<'_> {
+         self.console.echo(msg, self.settings.log_capacity);
+     }
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/hitvol.rs b/crates/console/src/feature_dispatch/hitvol.rs
+index b856da0..fb0a0e3 100644
+--- a/crates/console/src/feature_dispatch/hitvol.rs
++++ b/crates/console/src/feature_dispatch/hitvol.rs
+@@ -24,7 +24,6 @@ pub(crate) fn route_hitvol_commands(
+     }
+ }
+ 
+-
+ pub(super) fn hitvol_report(world: &sim::SimWorld) -> Vec<String> {
+     let census = world.collision_census();
+     let w = &census.world;
+@@ -95,4 +94,3 @@ pub(super) fn hitvol_report(world: &sim::SimWorld) -> Vec<String> {
+     }
+     out
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/mod.rs b/crates/console/src/feature_dispatch/mod.rs
+index 20f4ec9..97b0390 100644
+--- a/crates/console/src/feature_dispatch/mod.rs
++++ b/crates/console/src/feature_dispatch/mod.rs
+@@ -60,6 +60,14 @@ pub(crate) fn route_debug_feature_commands(
+     for cmd in events.read() {
+         match cmd.name.as_str() {
+             "bot" => match parse_bot_args(&cmd.args) {
++                Ok(BotVerb::Spartan(n)) => {
++                    bot_add.push_spartan(n);
++                    echo(format!("bot: queued {n} Spartans"), console, line);
++                }
++                Ok(BotVerb::Quickscope(n)) => {
++                    bot_add.push_quickscope(n);
++                    echo(format!("bot: queued {n} quickscopers"), console, line);
++                }
+                 Err(msg) => echo(msg, console, line),
+                 Ok(BotVerb::Add(n)) => {
+                     bot_add.push(n);
+@@ -184,7 +192,6 @@ pub(crate) fn resume_lifecycle_commands(
+ #[derive(Resource, Debug, Default, Clone, Copy)]
+ pub struct DebugPosOverlay(pub bool);
+ 
+-
+ pub fn register_feature_commands(registry: &mut crate::ConsoleRegistry, maps: &[String]) {
+     if registry.resolve("map").is_none() {
+         registry.register(
+@@ -259,7 +266,7 @@ pub fn register_feature_commands(registry: &mut crate::ConsoleRegistry, maps: &[
+         ),
+         (
+             "bot",
+-            "bot add [N] | dummy [N] | hold [on|off] | give <id> <weapon> [att...] | fire [all|<id>] | tp all|<id> above <h> | tp all|<id> <x> <y> <z>",
++            "bot add [N] | quickscope [N] | spartan [N] | dummy [N] | hold [on|off] | give <id> <weapon> [att...] | fire [all|<id>] | tp all|<id> above <h> | tp all|<id> <x> <y> <z>",
+         ),
+         (
+             "menu",
+@@ -281,11 +288,13 @@ pub fn register_feature_commands(registry: &mut crate::ConsoleRegistry, maps: &[
+     }
+ }
+ 
+-const BOT_USAGE: &str = "usage: bot add [N] | dummy [N] | hold [on|off] | give <id> <weapon> [att...] | fire [all|<id>] | tp all|<id> above <h> | tp all|<id> <x> <y> <z> [yaw] [pitch]";
++const BOT_USAGE: &str = "usage: bot add [N] | quickscope [N] | spartan [N] | dummy [N] | hold [on|off] | give <id> <weapon> [att...] | fire [all|<id>] | tp all|<id> above <h> | tp all|<id> <x> <y> <z> [yaw] [pitch]";
+ 
+ #[derive(Debug, PartialEq)]
+ pub(crate) enum BotVerb {
+     Add(u32),
++    Quickscope(u32),
++    Spartan(u32),
+     Dummy(u32),
+     Hold(bool),
+     Give {
+@@ -300,6 +309,25 @@ pub(crate) enum BotVerb {
+ pub(crate) fn parse_bot_args(args: &[String]) -> Result<BotVerb, String> {
+     let sub = args.first().map(String::as_str).unwrap_or("");
+     match sub {
++        "quickscope" | "spartan" => {
++            if args.len() > 2 {
++                return Err("usage: bot quickscope [1..16]".into());
++            }
++            let n = args
++                .get(1)
++                .map(|s| s.parse::<u32>())
++                .transpose()
++                .map_err(|_| "usage: bot quickscope [1..16]".to_owned())?
++                .unwrap_or(2);
++            if !(1..=16).contains(&n) {
++                return Err("bot quickscope: count must be 1..16".into());
++            }
++            Ok(if sub == "spartan" {
++                BotVerb::Spartan(n)
++            } else {
++                BotVerb::Quickscope(n)
++            })
++        }
+         "add" => {
+             let n = args
+                 .get(1)
+@@ -398,4 +426,3 @@ fn parse_finite(s: &String) -> Result<f32, String> {
+         .filter(|v| v.is_finite())
+         .ok_or_else(|| format!("bot: not a finite number `{s}`"))
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/process.rs b/crates/console/src/feature_dispatch/process.rs
+index 2577209..ed7b909 100644
+--- a/crates/console/src/feature_dispatch/process.rs
++++ b/crates/console/src/feature_dispatch/process.rs
+@@ -1,11 +1,7 @@
+ use std::io::Write;
+ 
+ use bevy::prelude::*;
+-use net::{
+-    MasterBridge,
+-    MasterBridgeState,
+-};
+-
++use net::{MasterBridge, MasterBridgeState};
+ 
+ const LEAVE_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+ 
+@@ -48,4 +44,3 @@ fn leave_master(bridge: &MasterBridge) {
+         LEAVE_BUDGET.as_millis()
+     );
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/replay.rs b/crates/console/src/feature_dispatch/replay.rs
+index c6b05c1..90dbd74 100644
+--- a/crates/console/src/feature_dispatch/replay.rs
++++ b/crates/console/src/feature_dispatch/replay.rs
+@@ -2,16 +2,14 @@ use std::io::ErrorKind;
+ use std::path::{Path, PathBuf};
+ use std::time::{SystemTime, UNIX_EPOCH};
+ 
+-use bevy::prelude::*;
+-use frame::{LaunchIdentity, RuntimeRole};
+-use net::{
+-    AuthorityClock, AuthorityInputGate, AuthorityWorld, PresentedSnapshot,
+-};
+-use render_frontend::prepare::scene::camera::SimCamera;
+ use ::replay::{
+     CLIP_DEMO_FILE, CLIP_DUMP_FILE, CLIP_MANIFEST_FILE, CLIP_MS, ClipRing, MatchRecordIdentity,
+     Recording, ReplaySession,
+ };
++use bevy::prelude::*;
++use frame::{LaunchIdentity, RuntimeRole};
++use net::{AuthorityClock, AuthorityInputGate, AuthorityWorld, PresentedSnapshot};
++use render_frontend::prepare::scene::camera::SimCamera;
+ 
+ use crate::{ConsoleCommand, ConsoleDispatch, ConsoleLine, ConsoleSettings, ConsoleState};
+ 
+@@ -258,7 +256,6 @@ pub(crate) fn route_replay_commands(
+     }
+ }
+ 
+-
+ fn parse_clip_args(args: &[String]) -> Result<(), String> {
+     if args.is_empty() {
+         Ok(())
+@@ -356,4 +353,3 @@ fn save_clip_package(
+     }
+     result
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/session.rs b/crates/console/src/feature_dispatch/session.rs
+index 74dcc1c..070689c 100644
+--- a/crates/console/src/feature_dispatch/session.rs
++++ b/crates/console/src/feature_dispatch/session.rs
+@@ -88,4 +88,3 @@ pub(crate) fn route_session_commands(
+         }
+     }
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/state_dump.rs b/crates/console/src/feature_dispatch/state_dump.rs
+index ee88eb7..7fb643b 100644
+--- a/crates/console/src/feature_dispatch/state_dump.rs
++++ b/crates/console/src/feature_dispatch/state_dump.rs
+@@ -5,9 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
+ 
+ use bevy::prelude::*;
+ use frame::LaunchIdentity;
+-use net::{
+-    AuthorityClock, AuthorityWorld, PresentedSnapshot,
+-};
++use net::{AuthorityClock, AuthorityWorld, PresentedSnapshot};
+ 
+ use crate::ConsoleCommand;
+ 
+@@ -61,7 +59,6 @@ pub(crate) fn route_state_dump_commands(
+     }
+ }
+ 
+-
+ fn parse_state_dump_name(args: &[String]) -> Result<String, String> {
+     let raw = match args {
+         [] => "snapshot",
+@@ -248,4 +245,3 @@ pub(super) fn persist_bytes_atomic(path: &Path, body: &str) -> Result<(), String
+     }
+     result
+ }
+-
+diff --git a/crates/console/src/feature_dispatch/ui.rs b/crates/console/src/feature_dispatch/ui.rs
+index ea3f441..9209e9c 100644
+--- a/crates/console/src/feature_dispatch/ui.rs
++++ b/crates/console/src/feature_dispatch/ui.rs
+@@ -1,9 +1,7 @@
++use ::ui::UiDraw;
+ use bevy::prelude::*;
+ use frame::LaunchIdentity;
+-use net::{
+-    AuthorityClock, AuthorityWorld, PresentedSnapshot,
+-};
+-use ::ui::UiDraw;
++use net::{AuthorityClock, AuthorityWorld, PresentedSnapshot};
+ 
+ use crate::{ConsoleCommand, ConsoleLine, ConsoleSettings, ConsoleState};
+ 
+@@ -147,7 +145,6 @@ pub(crate) fn route_ui_commands(
+     }
+ }
+ 
+-
+ const MENU_USAGE: &str = "usage: menu [open <screen> | nav up|down | accept | back | dump]";
+ 
+ #[derive(Debug, PartialEq)]
+diff --git a/crates/frame/src/session.rs b/crates/frame/src/session.rs
+index 6e4de1a..9c84ff3 100644
+--- a/crates/frame/src/session.rs
++++ b/crates/frame/src/session.rs
+@@ -303,6 +303,10 @@ pub enum ViewSubject {
+     Own {
+         client: u32,
+     },
++    Spectator {
++        viewer: u32,
++        focus: u32,
++    },
+     Seat {
+         viewer: u32,
+         focus: Option<u32>,
 diff --git a/crates/hud/src/gpu_list.rs b/crates/hud/src/gpu_list.rs
 index 8c3fc3f..0a3bbcc 100644
 --- a/crates/hud/src/gpu_list.rs
@@ -552,6 +1538,193 @@ index 897a3e8..289641c 100644
      for cmd in received.read().filter(|cmd| cmd.slot == 0) {
          pending.queued.push_back((cmd.key.clone(), cmd.optional));
      }
+diff --git a/crates/movement_iw4/src/air.rs b/crates/movement_iw4/src/air.rs
+index ff1dad6..3eee565 100644
+--- a/crates/movement_iw4/src/air.rs
++++ b/crates/movement_iw4/src/air.rs
+@@ -35,7 +35,7 @@ pub fn air_move<C: CollisionBackend>(
+         (cmd.rightmove as f32) * right[2] + (cmd.forwardmove as f32) * forward[2],
+     ];
+     let wishspeed = normalize(&mut wishdir);
+-    accelerate(ps, pml, &wishdir, wishspeed * command_scale, 1.0);
++    accelerate(ps, pml, &wishdir, wishspeed * command_scale, if ps.is_spartan() { 4.5 } else { 1.0 });
+ 
+     if pml.ground_plane != 0 {
+         let velocity = ps.velocity;
+diff --git a/crates/movement_iw4/src/walk.rs b/crates/movement_iw4/src/walk.rs
+index 08e462a..343a617 100644
+--- a/crates/movement_iw4/src/walk.rs
++++ b/crates/movement_iw4/src/walk.rs
+@@ -28,7 +28,7 @@ pub fn walk_move<C: CollisionBackend>(
+     bounds: MoveBounds,
+     collision: &C,
+ ) {
+-    if (ps.pm_flags & 0x2000) != 0 {
++    if !ps.is_spartan() && (ps.pm_flags & 0x2000) != 0 {
+         prone_velocity_scale(ps);
+     }
+ 
+diff --git a/crates/net/src/authority/runtime.rs b/crates/net/src/authority/runtime.rs
+index bc028c6..b952674 100644
+--- a/crates/net/src/authority/runtime.rs
++++ b/crates/net/src/authority/runtime.rs
+@@ -433,7 +433,7 @@ pub fn authority_should_tick(
+     hold: Option<Res<AuthorityLoadHold>>,
+ ) -> bool {
+     role.runs_authority()
+-        && world.is_some_and(|world| world.0.clip_brush_count() > 0)
++        && world.is_some_and(|world| world.0.has_world_clip())
+         && !hold.is_some_and(|h| h.0)
+ }
+ 
+diff --git a/crates/net/src/client/presentation/presented.rs b/crates/net/src/client/presentation/presented.rs
+index 4bc2c00..8424982 100644
+--- a/crates/net/src/client/presentation/presented.rs
++++ b/crates/net/src/client/presentation/presented.rs
+@@ -46,6 +46,7 @@ pub struct PresentLocalCensus {
+ 
+ #[derive(Resource, Clone, Debug, Default)]
+ pub struct PresentedSnapshot {
++    spectator: Option<(ClientId, ClientId, bool)>,
+     inner: Option<Arc<Snapshot>>,
+     previous_inner: Option<Arc<Snapshot>>,
+     frame_interpolation: f32,
+@@ -61,6 +62,7 @@ pub struct PresentedSnapshot {
+ 
+ impl PresentedSnapshot {
+     pub fn clear(&mut self) {
++        self.spectator = None;
+         self.inner = None;
+         self.previous_inner = None;
+         self.frame_interpolation = 0.0;
+@@ -73,6 +75,7 @@ impl PresentedSnapshot {
+     }
+ 
+     pub fn publish_decoded(&mut self, snapshot: Snapshot) {
++        self.spectator = None;
+         self.trajectory_time_ms = None;
+         self.trajectory_next = None;
+         self.presented_projectiles = authoritative_projectiles(&snapshot);
+@@ -147,6 +150,7 @@ impl PresentedSnapshot {
+         mut remote_poses: HashMap<ClientId, PlayerState>,
+         remote_provenance: HashMap<ClientId, PresentationSampleProvenance>,
+     ) {
++        self.spectator = None;
+         self.trajectory_time_ms = None;
+         self.trajectory_next = None;
+         self.presented_projectiles = authoritative_projectiles(&snapshot);
+@@ -250,6 +254,49 @@ impl PresentedSnapshot {
+         self.inner.as_deref()
+     }
+ 
++    /// A live view alias only. The viewer's network identity, authority inputs
++    /// and the observed bot's controller remain independent.
++    pub fn spectate_live(&mut self, viewer: ClientId, focus: ClientId, third_person: bool) {
++        if viewer == focus {
++            return;
++        }
++        let Some(mut ps) = self.player(focus).copied() else {
++            return;
++        };
++        let Some(meta) = self
++            .snapshot()
++            .and_then(|s| s.meta.for_client(focus))
++            .cloned()
++        else {
++            return;
++        };
++        if third_person {
++            ps.link_flags |= playerstate_iw4::LINK_FLAGS_FORCE_THIRD_PERSON;
++        }
++        self.pose.insert(viewer, ps);
++        self.view_offset = [0.0; 3];
++        if let Some(snapshot) = self.inner.as_mut() {
++            let snapshot = Arc::make_mut(snapshot);
++            if let Some((_, row)) = snapshot
++                .meta
++                .clients
++                .iter_mut()
++                .find(|(id, _)| *id == viewer)
++            {
++                *row = meta;
++            }
++        }
++        self.spectator = Some((viewer, focus, third_person));
++    }
++
++    pub fn spectator_target(&self) -> Option<ClientId> {
++        self.spectator.map(|(_, focus, _)| focus)
++    }
++
++    pub fn spectator_third_person(&self) -> Option<bool> {
++        self.spectator.map(|(_, _, third)| third)
++    }
++
+     pub fn tick(&self) -> Option<sim::Tick> {
+         self.inner.as_ref().map(|s| s.tick)
+     }
+@@ -339,6 +386,10 @@ impl PresentedSnapshot {
+         let Some(snap) = self.inner.as_ref() else {
+             return FpvEventCues::default();
+         };
++        let id = self
++            .spectator
++            .filter(|(viewer, _, _)| *viewer == id)
++            .map_or(id, |(_, focus, _)| focus);
+         fpv_cues_from_events(id, &snap.meta.journal, &snap.meta.entity_events)
+     }
+ }
+@@ -439,6 +490,9 @@ pub struct ViewweaponAim {
+ #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+ pub struct LocalPresentClient(pub ClientId);
+ 
++#[derive(Resource, Clone, Copy, Debug, Default)]
++pub struct LiveSpectatorTarget(pub Option<ClientId>, pub bool);
++
+ impl Default for LocalPresentClient {
+     fn default() -> Self {
+         Self(ClientId(0))
+diff --git a/crates/net/src/client/runtime.rs b/crates/net/src/client/runtime.rs
+index bcadefb..e964bce 100644
+--- a/crates/net/src/client/runtime.rs
++++ b/crates/net/src/client/runtime.rs
+@@ -1492,6 +1492,7 @@ impl GameplaySendPacer {
+ pub struct ClientReliableAck(pub u16);
+ 
+ pub fn publish_presented(
++    spectator: Option<Res<crate::LiveSpectatorTarget>>,
+     clock: Res<ClientClock>,
+     cg_clock: Res<FrameClock>,
+     mut entities: Query<&mut crate::CEntityRuntime>,
+@@ -1712,6 +1713,9 @@ pub fn publish_presented(
+             .then(|| proxy.0.snapshot_after(cg_clock.time()))
+             .flatten(),
+     );
++    if let Some(focus) = spectator.as_ref().and_then(|target| target.0) {
++        presented.spectate_live(local.0, focus, spectator.as_ref().is_some_and(|t| t.1));
++    }
+ }
+ 
+ pub fn reset_cgame_on_match_torn_down(
+diff --git a/crates/net/src/lib.rs b/crates/net/src/lib.rs
+index 59a84c0..9a8cac6 100644
+--- a/crates/net/src/lib.rs
++++ b/crates/net/src/lib.rs
+@@ -63,7 +63,7 @@ pub use client::presentation::entity_event_registry::{
+ };
+ pub use client::presentation::presented::{
+     FpvEventCues, FpvHandRecord, FpvRawHandSample, LocalPresentClient, PresentLocalCensus,
+-    PresentedSnapshot, ViewweaponAim,
++    PresentedSnapshot, ViewweaponAim, LiveSpectatorTarget,
+ };
+ pub use client::presentation::projectiles::{
+     PresentedProjectile, count_throw_rows, merge_presented_projectiles,
+@@ -166,4 +166,4 @@ pub use transport::udp_session::{CommittedAdmission, UdpAuthorityHub, UdpClientL
+ pub use transport::udp_socket::{DEFAULT_RECV_BUDGET_PER_TICK, UdpDatagramSocket, UdpSendError};
+ pub use transport::wire::{WireError, WireReader, WireWriter};
+ 
+-pub const PROTOCOL_VERSION: u32 = 81;
++pub const PROTOCOL_VERSION: u32 = 82;
 diff --git a/crates/net/src/policy/killcam.rs b/crates/net/src/policy/killcam.rs
 index ecb46c4..dc18f87 100644
 --- a/crates/net/src/policy/killcam.rs
@@ -571,6 +1744,18 @@ index ecb46c4..dc18f87 100644
      for viewer in seats.viewers() {
          if !scripted.iter().any(|(id, _)| *id == viewer) {
              seats.clear(viewer);
+diff --git a/crates/net/src/transport/netfields.rs b/crates/net/src/transport/netfields.rs
+index fd1a471..41097fb 100644
+--- a/crates/net/src/transport/netfields.rs
++++ b/crates/net/src/transport/netfields.rs
+@@ -236,6 +236,7 @@ macro_rules! read_by_kind {
+ }
+ 
+ ps_netfields! {
++    movement_profile: i32 = Replication::Replicated, Validation::Exact;
+     command_time: i32 = Replication::Replicated, Validation::Exact;
+     pm_type: i32 = Replication::Replicated, Validation::Exact;
+     pm_time: i32 = Replication::Replicated, Validation::Exact;
 diff --git a/crates/playerstate_iw4/src/lib.rs b/crates/playerstate_iw4/src/lib.rs
 index 371ebcb..fa8cda2 100644
 --- a/crates/playerstate_iw4/src/lib.rs
@@ -585,10 +1770,26 @@ index 371ebcb..fa8cda2 100644
      weap_flags,
  };
 diff --git a/crates/playerstate_iw4/src/playerstate.rs b/crates/playerstate_iw4/src/playerstate.rs
-index 9836c3d..7216468 100644
+index 9836c3d..49a5e95 100644
 --- a/crates/playerstate_iw4/src/playerstate.rs
 +++ b/crates/playerstate_iw4/src/playerstate.rs
-@@ -304,6 +304,9 @@ impl PlayerState {
+@@ -1,5 +1,7 @@
+ #[derive(Clone, Copy, Debug, PartialEq)]
+ pub struct PlayerState {
++    /// Local crossover class; replicated so prediction uses the same physics.
++    pub movement_profile: i32,
+     pub command_time: i32,
+     pub pm_type: i32,
+     pub pm_time: i32,
+@@ -179,6 +181,7 @@ pub const ENTITYNUM_NONE: i32 = 0x7FF;
+ 
+ impl PlayerState {
+     pub const ZERO: Self = Self {
++        movement_profile: 0,
+         command_time: 0,
+         pm_type: 0,
+         pm_time: 0,
+@@ -304,6 +307,9 @@ impl PlayerState {
  
  pub const PERK_PISTOLDEATH: u32 = 1 << 7;
  
@@ -598,11 +1799,42 @@ index 9836c3d..7216468 100644
  pub const PERK_QUIETER: u32 = 1 << 8;
  
  pub const PERK_COLDBLOODED: u32 = 1 << 27;
+@@ -316,3 +322,7 @@ pub struct AnimPair {
+ 
+     pub torso_anim: i32,
+ }
++
++impl PlayerState {
++    pub fn is_spartan(&self) -> bool { self.movement_profile == 1 }
++}
+diff --git a/crates/render_anim/src/occupancy/fpv_present.rs b/crates/render_anim/src/occupancy/fpv_present.rs
+index 6ad7050..14714cd 100644
+--- a/crates/render_anim/src/occupancy/fpv_present.rs
++++ b/crates/render_anim/src/occupancy/fpv_present.rs
+@@ -734,6 +734,10 @@ fn skin_fpv_geometry(
+     >,
+ ) {
+     fpv_plan.drawgun = product.drawgun;
++    // Hidden/refused FPV has no camera animation; never retain its last ADS/recoil lens.
++    for mut lens in &mut lenses {
++        *lens = Transform::IDENTITY;
++    }
+     let handle = fpv_plan.lighting_handle;
+     match &product.kind {
+         FpvPoseKind::Hide => crate::clear_fpv_draw_plan(&mut fpv_plan, handle),
 diff --git a/crates/render_anim/src/occupancy/remote_body.rs b/crates/render_anim/src/occupancy/remote_body.rs
-index 7e9fa2c..58dd7ee 100644
+index 7e9fa2c..b8a84f3 100644
 --- a/crates/render_anim/src/occupancy/remote_body.rs
 +++ b/crates/render_anim/src/occupancy/remote_body.rs
-@@ -229,7 +229,7 @@ fn occupy_remote_scene_ents(
+@@ -202,6 +202,7 @@ fn occupy_remote_scene_ents(
+     let eye = cameras.single().ok().map(|xf| xf.translation());
+     let in_killcam = subject.as_ref().is_some_and(|s| s.in_killcam());
+     let eyes = match subject.as_deref() {
++        Some(ViewSubject::Spectator { focus, .. }) => i32::try_from(*focus).unwrap_or(0),
+         Some(ViewSubject::Seat {
+             focus: Some(focus), ..
+         }) => i32::try_from(*focus).unwrap_or(0),
+@@ -229,7 +230,7 @@ fn occupy_remote_scene_ents(
              .and_then(|snap| snap.meta.for_client(client));
          let ffa_team = meta.and_then(|m| m.ffa_team);
          let client_state_team = meta.map(|m| m.client_state_team).unwrap_or(0);
@@ -611,7 +1843,15 @@ index 7e9fa2c..58dd7ee 100644
          let held = remote_pose_sample(runtime).weapon;
          let (kit_models, radius, hide_part_bits) = match live_kits {
              Some((kits, world)) => {
-@@ -354,7 +354,7 @@ fn sync_remote_bodies(
+@@ -316,6 +317,7 @@ fn sync_remote_bodies(
+ 
+     let in_killcam = subject.as_ref().is_some_and(|s| s.in_killcam());
+     let eyes = match subject.as_deref() {
++        Some(ViewSubject::Spectator { focus, .. }) => i32::try_from(*focus).unwrap_or(0),
+         Some(ViewSubject::Seat {
+             focus: Some(focus), ..
+         }) => i32::try_from(*focus).unwrap_or(0),
+@@ -354,7 +356,7 @@ fn sync_remote_bodies(
              .and_then(|snap| snap.meta.for_client(client));
          let ffa_team = meta.and_then(|m| m.ffa_team);
          let client_state_team = meta.map(|m| m.client_state_team).unwrap_or(0);
@@ -620,7 +1860,7 @@ index 7e9fa2c..58dd7ee 100644
          else {
              if remote.is_some() {
                  commands
-@@ -754,7 +754,14 @@ impl<'a> RemotePoseFrame<'a> {
+@@ -754,7 +756,14 @@ impl<'a> RemotePoseFrame<'a> {
          let slot_lods = slot.lods;
          let scene_ent_hidden = slot.hidden;
          let last_cache_hits = self.last_cache_hits;
@@ -658,6 +1898,250 @@ index 4b0ea4d..a0b6ce0 100644
          let focused_owner_id = focus_id.filter(|wanted| owner_id == Some(*wanted));
          if let Some(id) = focused_owner_id {
              focus.refuse(id, &owner.current_model.0, "unclassified_branch");
+diff --git a/crates/render_anim/src/occupancy/third_person.rs b/crates/render_anim/src/occupancy/third_person.rs
+index 4b1b693..e8ecd85 100644
+--- a/crates/render_anim/src/occupancy/third_person.rs
++++ b/crates/render_anim/src/occupancy/third_person.rs
+@@ -11,11 +11,77 @@ use render_scene::WorldCameraPose;
+ 
+ pub const CG_THIRD_PERSON_ANGLE_MP: f32 = 356.0;
+ 
++#[derive(Default)]
++pub struct LiveFollowCamera {
++    previous: Option<(ClientId, sim::LifeSequence, i32, [f32; 3])>,
++}
++
++impl LiveFollowCamera {
++    pub fn update(
++        &mut self,
++        presented: &PresentedSnapshot,
++        local: ClientId,
++        clip: Option<&ClipCollision>,
++        time: i32,
++    ) -> Option<WorldCameraPose> {
++        let focus = presented.spectator_target()?;
++        let ps = presented.player(local)?;
++        let life = presented.snapshot()?.meta.for_client(focus)?.life_sequence;
++        if !presented.spectator_third_person().unwrap_or(false) {
++            self.previous = None;
++            return None;
++        }
++        let clip = clip?;
++        let mut angles = [
++            math_iw4::angle_subtract(ps.viewangles[0], 0.0).clamp(-40.0, 45.0),
++            ps.viewangles[1],
++            0.0,
++        ];
++        if let Some((old_focus, old_life, old_time, old_angles)) = self.previous {
++            let dt = time.saturating_sub(old_time);
++            if old_focus == focus && old_life == life && (0..=200).contains(&dt) {
++                let blend = 1.0 - (-10.0 * dt as f32 / 1000.0).exp();
++                for k in 0..2 {
++                    angles[k] =
++                        old_angles[k] + math_iw4::angle_subtract(angles[k], old_angles[k]) * blend;
++                }
++            }
++        }
++        let yaw_lag = math_iw4::angle_subtract(ps.viewangles[1], angles[1]).clamp(-35.0, 35.0);
++        angles[1] = ps.viewangles[1] - yaw_lag;
++        self.previous = Some((focus, life, time, angles));
++        let (forward, right, _) = math_iw4::angle_vectors([0.0, angles[1], 0.0]);
++        let anchor = [
++            ps.origin[0],
++            ps.origin[1],
++            ps.origin[2] + ps.view_height_current.max(60.0) + 12.0,
++        ];
++        let desired = std::array::from_fn(|k| {
++            anchor[k] - forward[k] * 273.0 + right[k] * 42.0 + if k == 2 { 24.0 } else { 0.0 }
++        });
++        let origin = playerstate_iw4::pull_back_camera_through_brush(anchor, desired, |a, b| {
++            clip.sweep_box(a, b, [-6.0; 3], [6.0; 3], CG_CAMERA_PULLBACK_CLIPMASK)
++                .fraction
++        });
++        let direction = std::array::from_fn(|k| {
++            ps.origin[k] + forward[k] * 65.0 + if k == 2 { 40.0 - angles[0] * 0.5 } else { 0.0 }
++                - origin[k]
++        });
++        Some(WorldCameraPose {
++            origin,
++            angles: math_iw4::vect_to_angles(direction),
++        })
++    }
++}
++
+ pub fn presented_is_third_person(
+     presented: &PresentedSnapshot,
+     local: ClientId,
+     in_killcam: bool,
+ ) -> bool {
++    if let Some(third) = presented.spectator_third_person() {
++        return third;
++    }
+     let Some(ps) = presented.player(local) else {
+         return false;
+     };
+diff --git a/crates/render_anim/src/occupancy/view_kick.rs b/crates/render_anim/src/occupancy/view_kick.rs
+index 1ab45d7..dfaab70 100644
+--- a/crates/render_anim/src/occupancy/view_kick.rs
++++ b/crates/render_anim/src/occupancy/view_kick.rs
+@@ -162,6 +162,7 @@ pub fn reset_view_kick_on_life_started(
+ }
+ 
+ pub fn tick_session_view_kick(
++    mut watching: Local<Option<(sim::ClientId, sim::LifeSequence)>>,
+     clock: Res<FrameClock>,
+     presented: Res<PresentedSnapshot>,
+     local: Res<LocalPresentClient>,
+@@ -172,6 +173,18 @@ pub fn tick_session_view_kick(
+     let Some(ps) = presented.player(local.0) else {
+         return;
+     };
++    let next = presented.spectator_target().and_then(|id| {
++        presented
++            .snapshot()?
++            .meta
++            .for_client(id)
++            .map(|meta| (id, meta.life_sequence))
++    });
++    if *watching != next {
++        kick.clear_for_new_life();
++        *watching = next;
++    }
++
+     let viewmodel = get_viewmodel_weapon_index(ps);
+     if viewmodel != kick.last_weapon_id {
+         kick.state.reset();
+@@ -237,6 +250,8 @@ pub fn tick_session_view_kick(
+ 
+ pub fn sync_camera_from_presented(
+     mut killcam: Local<super::killcam::KillcamCamera>,
++    mut follow: Local<super::third_person::LiveFollowCamera>,
++    mut first_eye: Local<Option<(sim::ClientId, sim::LifeSequence, i32, f32)>>,
+     clock: Res<FrameClock>,
+     presented: Res<PresentedSnapshot>,
+     local: Res<LocalPresentClient>,
+@@ -265,6 +280,10 @@ pub fn sync_camera_from_presented(
+     let Some(ps) = presented.player(local.0) else {
+         return;
+     };
++    if presented.spectator_third_person() == Some(false) && (ps.health <= 0 || ps.pm_type > 4) {
++        return;
++    }
++
+     let viewmodel = get_viewmodel_weapon_index(ps);
+     if let Some((pose, fov, focus_distance)) = killcam.update(
+         &presented,
+@@ -310,7 +329,14 @@ pub fn sync_camera_from_presented(
+         return;
+     }
+     if presented_is_third_person(&presented, local.0, view.in_killcam()) {
+-        let Some(pose) = death_watch_camera(&presented, local.0, death_cam_clip.0.as_deref())
++        let live_follow = follow.update(
++            &presented,
++            local.0,
++            death_cam_clip.0.as_deref(),
++            clock.time(),
++        );
++        let Some(pose) = live_follow
++            .or_else(|| death_watch_camera(&presented, local.0, death_cam_clip.0.as_deref()))
+         else {
+             return;
+         };
+@@ -319,18 +345,32 @@ pub fn sync_camera_from_presented(
+             transform.translation = eye.translation;
+             transform.rotation = eye.rotation;
+         }
+-        apply_fpv_lens_fov(
+-            &mut lenses,
+-            settings.fov,
+-            ps.pm_type,
+-            ps.link_flags,
+-            ps.e_flags,
+-            0.0,
+-            viewmodel,
+-            weapons.as_ref().and_then(|w| w.0.facts_of(viewmodel)),
+-            false,
+-            actions.as_deref_mut(),
+-        );
++        let horiz = if live_follow.is_some() {
++            let horiz = settings.fov.max(80.0);
++            for mut projection in &mut lenses {
++                if let Projection::Perspective(p) = &mut *projection {
++                    p.fov = horizontal_to_vertical_fov_deg(horiz).to_radians();
++                }
++            }
++            horiz
++        } else {
++            apply_fpv_lens_fov(
++                &mut lenses,
++                settings.fov,
++                ps.pm_type,
++                ps.link_flags,
++                ps.e_flags,
++                0.0,
++                viewmodel,
++                weapons.as_ref().and_then(|w| w.0.facts_of(viewmodel)),
++                false,
++                actions.as_deref_mut(),
++            )
++            .unwrap_or(settings.fov)
++        };
++        kick.refdef_vieworg = pose.origin;
++        kick.refdef_view_angles = pose.angles;
++        kick.horiz_fov_deg = horiz;
+         return;
+     }
+     let offset = presented.view_offset();
+@@ -426,6 +466,29 @@ pub fn sync_camera_from_presented(
+     if origin[2] < min_z {
+         origin[2] = min_z;
+     }
++    if let Some(focus) = presented.spectator_target() {
++        let life = presented
++            .snapshot()
++            .and_then(|s| s.meta.for_client(focus))
++            .map(|m| m.life_sequence);
++        if let Some(life) = life {
++            if let Some((old_focus, old_life, at, z)) = *first_eye {
++                let dt = clock.time().saturating_sub(at);
++                if old_focus == focus
++                    && old_life == life
++                    && (0..=100).contains(&dt)
++                    && ps.ground_entity_num != playerstate_iw4::ENTITYNUM_NONE
++                    && (z - origin[2]).abs() < 24.0
++                {
++                    origin[2] = z + (origin[2] - z) * (1.0 - (-18.0 * dt as f32 / 1000.0).exp());
++                }
++            }
++            origin[2] = origin[2].max(ps.origin[2] + ps.view_height_current - 8.0);
++            *first_eye = Some((focus, life, clock.time(), origin[2]));
++        }
++    } else {
++        *first_eye = None;
++    }
+     kick.refdef_vieworg = origin;
+     let pose = WorldCameraPose { origin, angles };
+     let eye = transform_from_iw_view(pose);
+diff --git a/crates/render_frontend/src/adapters/fx/system.rs b/crates/render_frontend/src/adapters/fx/system.rs
+index c8f05db..6449888 100644
+--- a/crates/render_frontend/src/adapters/fx/system.rs
++++ b/crates/render_frontend/src/adapters/fx/system.rs
+@@ -2151,6 +2151,7 @@ fn fire_weapon(
+         .and_then(|weapons| weapons.0.combat_fx_of(fire.event.payload.weapon));
+ 
+     let eyes = match *view {
++        ViewSubject::Spectator { focus, .. } => i32::try_from(focus).unwrap_or(0),
+         ViewSubject::Seat {
+             focus: Some(focus), ..
+         } => i32::try_from(focus).unwrap_or(0),
+@@ -2967,6 +2968,7 @@ fn melee_blood(
+         return;
+     };
+     let eyes = match *view {
++        ViewSubject::Spectator { focus, .. } => i32::try_from(focus).unwrap_or(0),
+         ViewSubject::Seat {
+             focus: Some(focus), ..
+         } => i32::try_from(focus).unwrap_or(0),
 diff --git a/crates/render_frontend/src/assemble/mod.rs b/crates/render_frontend/src/assemble/mod.rs
 index a798450..3731550 100644
 --- a/crates/render_frontend/src/assemble/mod.rs
@@ -692,14 +2176,183 @@ index d61b8c7..aa6cd9a 100644
 +
 +// Native cinematic extensions can control first-person visibility.
 +pub use render_anim::FpvDrawPlan;
+diff --git a/crates/render_gpu/src/drawsurf/draw.rs b/crates/render_gpu/src/drawsurf/draw.rs
+index 51d2a7c..58533b5 100644
+--- a/crates/render_gpu/src/drawsurf/draw.rs
++++ b/crates/render_gpu/src/drawsurf/draw.rs
+@@ -29,6 +29,7 @@ pub(crate) fn register_drawsurf_render(app: &mut App) {
+     super::colour_submit::register(app);
+     super::sun_effects::register(app);
+     super::postfx::register(app);
++    super::clarity::register(app);
+     super::iw_tess::register(app);
+     super::model_lighting_tiles::register(app);
+     super::geometry_diagnostic::register(app);
+diff --git a/crates/render_gpu/src/drawsurf/iw_tess.rs b/crates/render_gpu/src/drawsurf/iw_tess.rs
+index 75b87ab..0ba0c9c 100644
+--- a/crates/render_gpu/src/drawsurf/iw_tess.rs
++++ b/crates/render_gpu/src/drawsurf/iw_tess.rs
+@@ -759,6 +759,7 @@ pub(super) fn register(app: &mut App) {
+             Core3d,
+             draw_iw_tess
+                 .in_set(Core3dSystems::PostProcess)
+-                .after(super::postfx::PostFxSet),
++                .after(super::postfx::PostFxSet)
++                .after(super::clarity::ClaritySet),
+         );
+ }
+diff --git a/crates/render_gpu/src/drawsurf/mod.rs b/crates/render_gpu/src/drawsurf/mod.rs
+index 3f332f6..63a6578 100644
+--- a/crates/render_gpu/src/drawsurf/mod.rs
++++ b/crates/render_gpu/src/drawsurf/mod.rs
+@@ -1,4 +1,5 @@
+ mod admitted;
++mod clarity;
+ mod backend;
+ mod colour_submit;
+ mod depth_range;
+diff --git a/crates/session/src/match_apply.rs b/crates/session/src/match_apply.rs
+index 7c57461..b913124 100644
+--- a/crates/session/src/match_apply.rs
++++ b/crates/session/src/match_apply.rs
+@@ -431,7 +431,7 @@ pub fn apply_prepared_match(
+             sim.start_gsc(&entry, sim::script::Value::level(), Vec::new())
+                 .map_err(|e| script_refusal(&zone, gametype, "entry", &e))?;
+         }
+-        let load_hold = AuthorityLoadHold(sim.clip_brush_count() > 0);
++        let load_hold = AuthorityLoadHold(sim.has_world_clip());
+         if let Some(glass) = scene.fx_glass.as_ref() {
+             let panes = (0..glass.piece_places.len())
+                 .filter_map(|i| {
+@@ -692,6 +692,32 @@ fn script_install_facts(
+ 
+ const MATCH_CONFIG: &str = "default_xboxlive.cfg";
+ 
++fn instant_respawn_source(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
++    let mut source = sim::script::decode_source(&bytes);
++    let timer = source
++        .find("self.respawnTimerStartTime = gettime() + 1000;")
++        .ok_or("instant respawn: death timer block is missing")?;
++    let start = source[..timer]
++        .rfind("if ( !isFauxDeath )")
++        .ok_or("instant respawn: death delay guard is missing")?;
++    let signal = "victim notify( \"death_delay_finished\" );";
++    let end = timer
++        + source[timer..]
++            .find(signal)
++            .ok_or("instant respawn: death delay notification is missing")?
++        + signal.len();
++    let close = end
++        + source[end..]
++            .find('}')
++            .ok_or("instant respawn: death delay block is unclosed")?
++        + 1;
++    source.replace_range(
++        start..close,
++        "if ( !isFauxDeath ) { victim notify( \"death_delay_finished\" ); }",
++    );
++    Ok(source.into_bytes())
++}
++
+ fn config_sets(text: &str) -> Vec<(String, String)> {
+     text.lines()
+         .filter_map(|line| {
+@@ -738,7 +764,12 @@ fn preflight_match_install(
+ ) -> Result<MatchInstallPlan, InstallRefusal> {
+     let weapons = PreparedWeapons(prepared.weapons);
+     let fpv_meshes = PreparedFpvMeshes(prepared.fpv_meshes);
+-    let bodies = assets::PreparedBodies(prepared.bodies);
++    let portraits = if std::env::var_os("IW4L_BOT_MATCH").is_some() {
++        assets::player_portraits(&prepared.bodies, &prepared.materials.population)
++    } else {
++        [None, None]
++    };
++    let bodies = assets::PreparedBodies(prepared.bodies, portraits);
+     let world_weapons = assets::PreparedWorldWeapons(prepared.world_weapons);
+     let projectile_meshes = assets::PreparedProjectileMeshes(prepared.projectile_meshes);
+     let xmodel_walk = std::mem::take(&mut prepared.xmodel_walk);
+@@ -845,18 +876,25 @@ fn preflight_match_install(
+             return Err(InstallRefusal::with_gap(gap, gap));
+         }
+     };
+-    struct Sources(assets::ScriptSources);
++    struct Sources(assets::ScriptSources, bool);
+     impl sim::script::SourceResolver for Sources {
+         fn read(&self, module: &str) -> Result<String, String> {
+-            self.0
+-                .read(module)
++            self.read_bytes(module)
+                 .map(|bytes| sim::script::decode_source(&bytes))
+         }
+         fn read_bytes(&self, module: &str) -> Result<Vec<u8>, String> {
+-            self.0.read(module)
++            let bytes = self.0.read(module)?;
++            if self.1 && module == "maps/mp/gametypes/_damage" {
++                instant_respawn_source(bytes)
++            } else {
++                Ok(bytes)
++            }
+         }
+     }
+-    let sources = Sources(std::mem::take(&mut prepared.scripts));
++    let sources = Sources(
++        std::mem::take(&mut prepared.scripts),
++        std::env::var("IW4L_INSTANT_RESPAWN").is_ok_and(|value| value == "1"),
++    );
+     let gametype = kind
+         .script_tokens()
+         .iter()
+diff --git a/crates/session/src/view_subject.rs b/crates/session/src/view_subject.rs
+index c13c4ac..39376aa 100644
+--- a/crates/session/src/view_subject.rs
++++ b/crates/session/src/view_subject.rs
+@@ -7,6 +7,13 @@ pub fn publish_view_subject(
+     local: Res<LocalPresentClient>,
+     mut subject: ResMut<ViewSubject>,
+ ) {
++    if let Some(focus) = presented.spectator_target() {
++        *subject = ViewSubject::Spectator {
++            viewer: local.0.0,
++            focus: focus.0,
++        };
++        return;
++    }
+     let ps = presented.player(local.0);
+     *subject = match ps {
+         None => ViewSubject::None,
 diff --git a/crates/sim/src/carrier.rs b/crates/sim/src/carrier.rs
-index a11f7be..d85df4f 100644
+index a11f7be..33aeaf0 100644
 --- a/crates/sim/src/carrier.rs
 +++ b/crates/sim/src/carrier.rs
-@@ -256,6 +256,72 @@ impl SimWorld {
+@@ -256,6 +256,97 @@ impl SimWorld {
          }
      }
  
++    pub fn configure_quickscope_bot(&mut self, id: ClientId, spartan: bool) {
++        let mut frame = self.frame();
++        crate::script_player::clear_perks(&mut frame, id);
++        for perk in ["specialty_fastreload", "specialty_quickdraw", "specialty_fastsnipe",
++                     "specialty_lightweight", "specialty_heartbreaker", "specialty_quieter"] {
++            crate::script_player::set_perk(&mut frame, id, perk, true);
++        }
++        frame.client_meta_mut(id).max_health = 30;
++        if let Some(ps) = frame.player_mut(id) {
++            ps.max_health = 30;
++            ps.health = ps.health.min(30);
++            ps.movement_profile = i32::from(spartan);
++            ps.gravity = if spartan { 386 } else { 800 };
++            ps.speed = if spartan { 270 } else { 190 };
++            ps.move_speed_scale_multiplier = if spartan { 1.0 } else { 1.07 };
++        }
++        // Endless arena reserve; the magazine still empties and reloads using
++        // normal weapon timing. Avoid a permanent all-bots-out-of-ammo stalemate.
++        if let Some(weapon) = frame.player(id).map(|ps| ps.weapon) {
++            if crate::script_player::ammo_stock(&frame, id, weapon) < 5 {
++                crate::script_player::set_ammo_stock(&mut frame, id, weapon, 15);
++            }
++        }
++    }
++
 +    /// Apply a local cinematic loadout without healing or resurrecting actors.
 +    pub fn configure_cinema_actor(&mut self,id:ClientId,health:i32,name:&str,pro:bool) {
 +        let mut frame=self.frame();
@@ -770,13 +2423,21 @@ index a11f7be..d85df4f 100644
          self.frame().set_origin(id, origin)
      }
 diff --git a/crates/sim/src/combat.rs b/crates/sim/src/combat.rs
-index bcd5a3c..46a9cf2 100644
+index bcd5a3c..9d63569 100644
 --- a/crates/sim/src/combat.rs
 +++ b/crates/sim/src/combat.rs
-@@ -663,6 +663,9 @@ pub(crate) fn advance_weapon_command(
+@@ -657,12 +657,15 @@ pub(crate) fn advance_weapon_command(
+                         &facts.spread_facts(),
+                         weapon_iw4::perk_weap_spread_multiplier(ps.perks[0]),
+                     );
+-                    let spread_degrees = fire_weapon_spread_degrees(
++                    let spread_degrees = if ps.is_spartan() { facts.ads_spread } else { fire_weapon_spread_degrees(
+                         cone,
+                         facts.ads_spread,
                          ads_frac,
                          aim_spread_scale,
-                     );
+-                    );
++                    ) };
 +                    if std::env::var_os("IW4L_CINEMA").is_some() {
 +                        diag::info!(Sim,"CINEMA SHOT actor={} ads={:.3} cone={:.3}",id.0,ads_frac,spread_degrees);
 +                    }
@@ -841,7 +2502,7 @@ index f4569c6..0b98f5f 100644
          "specialty_marathon" => movement_iw4::PERK_MARATHON,
          "specialty_bulletaccuracy" => weapon_iw4::PERK_BULLETACCURACY,
 diff --git a/crates/sim/src/step.rs b/crates/sim/src/step.rs
-index 79e97e1..0d16f28 100644
+index 79e97e1..d8bced5 100644
 --- a/crates/sim/src/step.rs
 +++ b/crates/sim/src/step.rs
 @@ -50,6 +50,7 @@ pub(crate) fn schedule() -> Schedule {
@@ -852,7 +2513,7 @@ index 79e97e1..0d16f28 100644
                  crate::script::sync_engine_events,
                  finalize_system,
                  publish_snapshot_system,
-@@ -316,9 +317,16 @@ fn run_players_system(ecs: &mut World) {
+@@ -316,13 +317,20 @@ fn run_players_system(ecs: &mut World) {
                  }
              });
              let overlay_reticle = facts.map(|f| f.overlay_reticle).unwrap_or(0);
@@ -870,6 +2531,33 @@ index 79e97e1..0d16f28 100644
              let (melee_delay_ms, melee_charge_delay_ms) = facts
                  .map(|f| (f.melee_delay_ms, f.melee_charge_delay_ms))
                  .unwrap_or((0, 0));
+-            let context = pmove_context(
++            let mut context = pmove_context(
+                 old_buttons,
+                 scales,
+                 ads_allowed,
+@@ -339,9 +347,21 @@ fn run_players_system(ecs: &mut World) {
+                     .and_then(|m| m.shellshock.as_ref())
+                     .is_some_and(|shock| shock.movement),
+             );
++            if ps.is_spartan() {
++                // CE-scale run speed and jump impulse (252 in/s); retain the
++                // native collision sweep and share this path with prediction.
++                context.walk.jump.jump_height = 252.0 * 252.0 / (2.0 * 386.0);
++                let scale = &mut context.walk.cmd_scale;
++                scale.player_back_speed_scale = 2.0 / 2.25;
++                scale.player_strafe_speed_scale = 2.0 / 2.25;
++                scale.player_sprint_speed_scale = 1.0;
++                scale.weapon_move_speed_scale = 1.0;
++                scale.weapon_ads_move_speed_scale = 1.0;
++            }
+             crate::script::player_commands(world.ecs(), id.0, cmd.buttons, old_buttons);
+             let mut cmd = *cmd;
+             crate::script_player::constrain_cmd(&mut world, *id, &mut cmd);
++            if ps.is_spartan() { cmd.buttons &= !playerstate_iw4::buttons::SPRINT; }
+             crate::script::select_location(world.ecs(), id.0, &mut cmd, old_buttons);
+             if world
+                 .client_meta(*id)
 diff --git a/crates/ui/src/menu.rs b/crates/ui/src/menu.rs
 index 3807199..f4eb3a3 100644
 --- a/crates/ui/src/menu.rs
@@ -890,6 +2578,43 @@ index 3807199..f4eb3a3 100644
      for (name, menu) in &mut catalog.menus {
          if let Some(chat) = menu
              .items
+diff --git a/docs/BOTS.md b/docs/BOTS.md
+index 47c9805..ad2de43 100644
+--- a/docs/BOTS.md
++++ b/docs/BOTS.md
+@@ -16,8 +16,6 @@ Bots submit `TickInput.cmds` like players — [`SIM-STEP.md`](SIM-STEP.md).
+ | `query.rs` | the shared collision budget every subsystem draws on |
+ | `weapon.rs` / `motor.rs` | the weapon channel; aim and movement |
+ 
+-## The three rules that shape the rest
+-
+ **A negative needs a probe that ran.** Visibility answers seen, evaluated and
+ not seen, or not evaluated. Only the second ends a contact; the third holds it,
+ briefly and without coordinates. Firing needs a positive observation of that
+@@ -34,17 +32,19 @@ is resumable, so a zero allocation repeats nothing and A\* keeps its frontier
+ under the shared 2048-expansion quota. Answers that follow from graph topology
+ alone are cached per request key until the graph changes; collision-dependent
+ refusals are rechecked.
+-
+-## Movement and combat
+-
+ The graph bakes world-aligned tiles at 48 units, refined to 24 near missing
+ support or a height change, with directed Walk, Drop and BreakGlass edges that
+ keep their entry and exit through execution. A fight moves to a *position*: one
+ baked support per sector around the threat, checked for line of fire and
+ exposure, then reached through the ordinary route executor — reachability is
+ never inferred from a component label.
+-
+ `HostController::decision()` exposes scores, stage and objective; the periodic
+ aggregate adds per-subsystem query counts and stuck bots. Both read live from a
+ running match, which is where bot behaviour is judged: `make map mp_boneyard`
+ ([`RUN.md`](RUN.md)) and watch the aggregate.
++The local director patch adds `bot quickscope [N]` (Intervention, allies) and
++`bot spartan [N]` (Intervention, axis, CE-style jump/air control and accuracy).
++Both use the host controller and ordinary damage/respawn. `IW4L_BOT_MATCH=1`
++installs the 4v4 observer; click/F6 cycles eight live player views and
++overview; F5 overview, V/F7 shoulder view. Both classes have 30 HP; COD bots
++plant their feet to fire. Instant respawns: see parent `docs/BOT_MATCHES.md`.
 diff --git a/crates/assets/src/local_chief.rs b/crates/assets/src/local_chief.rs
 new file mode 100644
 index 0000000..576cb20
@@ -1018,6 +2743,1619 @@ index 0000000..576cb20
 +    let mut min=[f32::INFINITY;3];let mut max=[f32::NEG_INFINITY;3];for v in &s.positions{for k in 0..3{min[k]=min[k].min(v[k]);max[k]=max[k].max(v[k]);}}s.bounds=Some((min,max));
 +    asset_model::link::stamp_xmodel_material_edges(keys,edges,&s.surface_materials,materials);
 +    Ok(())
++}
+diff --git a/crates/assets/src/local_map.rs b/crates/assets/src/local_map.rs
+new file mode 100644
+index 0000000..8958f7e
+--- /dev/null
++++ b/crates/assets/src/local_map.rs
+@@ -0,0 +1,785 @@
++use std::{fs, path::Path, sync::Arc};
++
++use asset_core::AssetRef;
++use asset_world::*;
++use bevy::render::render_resource::{Extent3d, TextureFormat};
++use dpvs_iw4::{AabbNodeView, Bounds, SurfRange};
++use serde_json::Value;
++
++fn array3(v: &Value) -> Result<Vec<[f32; 3]>, String> {
++    let rows: Vec<[f32; 3]> = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
++    if rows.iter().flatten().any(|n| !n.is_finite()) {
++        return Err("non-finite map coordinate".into());
++    }
++    Ok(rows)
++}
++
++fn integer(v: &Value) -> Result<usize, String> {
++    v.as_u64()
++        .and_then(|n| usize::try_from(n).ok())
++        .ok_or_else(|| "invalid map index".into())
++}
++
++fn bounds(positions: &[[f32; 3]]) -> Bounds {
++    let mut min = [f32::INFINITY; 3];
++    let mut max = [f32::NEG_INFINITY; 3];
++    for p in positions {
++        for k in 0..3 {
++            min[k] = min[k].min(p[k]);
++            max[k] = max[k].max(p[k]);
++        }
++    }
++    Bounds::from_mins_maxs(min, max)
++}
++
++fn texture_path(path: &Path, file: &Value) -> Result<std::path::PathBuf, String> {
++    let file = file.as_str().ok_or("missing texture file")?;
++    if file.is_empty() || file.contains('/') || file.contains('\\') || file == ".." {
++        return Err("map texture must be beside map.json".into());
++    }
++    Ok(path.join(file))
++}
++
++pub(crate) fn install(prepared: &mut crate::PreparedMatch) -> Result<(), String> {
++    let Some(path) = std::env::var_os("IW4L_LOCAL_MAP") else {
++        return Ok(());
++    };
++    let path = Path::new(&path);
++    let bytes = fs::read(path.join("map.json")).map_err(|e| e.to_string())?;
++    let pack: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
++    if pack["version"] != 1 || pack["units"] != "inches" {
++        return Err("unsupported local map format".into());
++    }
++    let name = pack["name"].as_str().ok_or("missing local map name")?;
++    if !name
++        .bytes()
++        .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
++    {
++        return Err("invalid local map name".into());
++    }
++    let positions = array3(&pack["positions"])?;
++    let normals = array3(&pack["normals"])?;
++    let uvs: Vec<[f32; 2]> =
++        serde_json::from_value(pack["uvs"].clone()).map_err(|e| e.to_string())?;
++    let indices: Vec<u32> =
++        serde_json::from_value(pack["indices"].clone()).map_err(|e| e.to_string())?;
++    let n = positions.len();
++    if n == 0
++        || n > 1_000_000
++        || normals.len() != n
++        || uvs.len() != n
++        || uvs.iter().flatten().any(|v| !v.is_finite())
++        || indices.len() % 3 != 0
++        || indices.iter().any(|i| *i as usize >= n)
++    {
++        return Err("invalid local map geometry".into());
++    }
++    let rows = pack["surfaces"].as_array().ok_or("missing surfaces")?;
++    if rows.is_empty() || rows.len() > 65535 {
++        return Err("invalid map surface count".into());
++    }
++    let definitions = Arc::make_mut(&mut prepared.materials.population);
++    let candidates: Vec<_> = definitions
++        .materials
++        .iter()
++        .enumerate()
++        .filter(|(_, m)| {
++            matches!(
++                m.route.map(|r| r.pass),
++                Some(asset_iw4::MaterialPass::Unlit)
++            ) && m
++                .textures
++                .iter()
++                .any(|t| t.semantic == asset_material::TS_COLOR_MAP && t.image.is_some())
++        })
++        .collect();
++    let template = candidates
++        .iter()
++        .find(|(_, m)| m.technique_set.as_str() == "wc_unlit_multiply_lin")
++        .map(|(i, _)| *i)
++        .ok_or("native unlit replacement material unavailable")?;
++    let mut original = definitions.materials[template].clone();
++    let facts = definitions
++        .technique_set_facts()
++        .iter()
++        .find(|f| f.namespace == original.namespace && f.name == original.technique_set)
++        .ok_or("world texture technique unavailable")?
++        .clone();
++    // An authored RGBA sample pass preserves Halo cutout alpha without the
++    // retail decal's multiply/fog passes. It uses the existing native world VS.
++    // ps_3_0; dcl_texcoord0 v0; dcl_2d s0; texld r0,v0,s0; mov oC0,r0; end.
++    let words: [u32; 15] = [
++        0xffff0300,
++        sm3_instruction(0x1f, 2),
++        0x80000005,
++        0x900f0000,
++        sm3_instruction(0x1f, 2),
++        0x90000000,
++        0xa00f0800,
++        sm3_instruction(0x42, 3),
++        0x800f0000,
++        0x90e40000,
++        0xa0e40800,
++        sm3_instruction(0x01, 2),
++        0x800f0800,
++        0x80e40000,
++        0x0000ffff,
++    ];
++    let source_pixel = facts
++        .table
++        .as_ref()
++        .and_then(|t| t.graph.as_ref())
++        .and_then(|g| g.slots.get(4))
++        .and_then(Option::as_ref)
++        .and_then(|t| t.passes.first())
++        .and_then(|p| p.pixel_shader.shader)
++        .ok_or("world texture pixel shader unavailable")?;
++    let mut pixel = definitions.shaders[source_pixel].clone();
++    pixel.name = AssetRef::Real(format!("local_map/{name}/rgba"));
++    pixel.program = words.into_iter().flat_map(u32::to_le_bytes).collect();
++    let pixel_index = definitions.shaders.len();
++    definitions.shaders.push(pixel);
++    let install_technique = |water: bool, definitions: &mut asset_material::MaterialDefinitions| {
++        let mut facts = facts.clone();
++        let shader = if water {
++            let mut pixel = definitions.shaders[pixel_index].clone();
++            pixel.name = AssetRef::Real(format!("local_map/{name}/flow"));
++            pixel.program = water_program()
++                .into_iter()
++                .flat_map(u32::to_le_bytes)
++                .collect();
++            let index = definitions.shaders.len();
++            definitions.shaders.push(pixel);
++            index
++        } else {
++            pixel_index
++        };
++        let table = facts.table.as_mut().expect("checked technique table");
++        let graph = table.graph.as_mut().expect("checked technique graph");
++        for (i, technique) in graph.slots.iter_mut().enumerate() {
++            if let Some(technique) = technique {
++                technique.passes.truncate(1);
++                let pass = &mut technique.passes[0];
++                pass.pixel_shader.shader = Some(shader);
++                if water {
++                    pass.arguments.insert(
++                        0,
++                        asset_material::OwnedShaderArgument::CodePixelConstant {
++                            destination: 220,
++                            index: 7,
++                            first_row: 0,
++                            row_count: 1,
++                        },
++                    );
++                    pass.per_prim_arg_count += 1;
++                }
++                table.pass_count_by_slot[i] = 1;
++            }
++        }
++        table.max_pass_count = 1;
++        facts.name = AssetRef::Real(format!(
++            "local_map/{name}/{}",
++            if water { "flow_world" } else { "unlit_world" }
++        ));
++        let mut material = original.clone();
++        material.technique_set = facts.name.clone();
++        material.technique_table = facts.table.clone();
++        material.technique_set_edge = asset_core::AssetEdge::bind_order(
++            definitions.install_local_technique_set(facts),
++            material.zone,
++        );
++        material
++    };
++    let water_material = install_technique(true, definitions);
++    original = install_technique(false, definitions);
++
++    diag::info!(
++        World,
++        "local map material template: {} ({})",
++        original.name,
++        original.technique_set
++    );
++    let mut map_materials = Vec::new();
++    for row in pack["materials"].as_array().ok_or("missing materials")? {
++        let width = integer(&row["width"])?;
++        let height = integer(&row["height"])?;
++        if width == 0 || height == 0 || width > 8192 || height > 8192 {
++            return Err("invalid map texture size".into());
++        }
++        let pixels = fs::read(texture_path(path, &row["file"])?).map_err(|e| e.to_string())?;
++        if pixels.len() != width * height * 4 {
++            return Err("invalid map RGBA size".into());
++        }
++        let material_name = format!(
++            "local_map/{name}/{}",
++            row["name"].as_str().ok_or("missing material name")?
++        );
++        let mut material = if row["water"] == true {
++            water_material.clone()
++        } else {
++            original.clone()
++        };
++        material.name = AssetRef::Real(material_name.clone());
++        material.camera_region = asset_iw4::CAMERA_REGION_LIT_OPAQUE;
++        for bits in &mut material.state_bits {
++            bits[0] &= !(asset_material::GFXS0_SRGBWRITEENABLE
++                | 0x7ff
++                | asset_iw4::GFXS0_ATEST_DISABLE
++                | asset_iw4::GFXS0_ATEST_MASK
++                | asset_iw4::GFXS0_CULL_MASK);
++            bits[0] |= asset_iw4::GFXS0_CULL_NONE
++                | if row["alpha"] == true {
++                    asset_iw4::GFXS0_ATEST_GE_128
++                } else {
++                    asset_iw4::GFXS0_ATEST_DISABLE
++                };
++            bits[1] = (bits[1] & !0xf)
++                | asset_iw4::GFXS1_DEPTHWRITE
++                | asset_iw4::GFXS1_DEPTHTEST_LESSEQUAL;
++        }
++        let binding = material
++            .textures
++            .iter_mut()
++            .find(|t| t.semantic == asset_material::TS_COLOR_MAP)
++            .ok_or("no map diffuse sampler")?;
++        let mut image = definitions.images[binding.image.ok_or("no template image")?].clone();
++        let mut decoded = (**image.decoded.as_ref().ok_or("undecoded map template")?).clone();
++        let (pixels, levels) = mip_chain(pixels, width, height, row["alpha"] == true);
++        decoded.data = Some(pixels);
++        decoded.texture_descriptor.size = Extent3d {
++            width: width as u32,
++            height: height as u32,
++            depth_or_array_layers: 1,
++        };
++        decoded.texture_descriptor.format = TextureFormat::Rgba8Unorm;
++        decoded.texture_descriptor.mip_level_count = levels;
++        decoded.texture_view_descriptor = None;
++        image.name = AssetRef::Real(material_name);
++        image.width = width as u16;
++        image.height = height as u16;
++        image.level_count = levels as u8;
++        image.payload = Arc::new(Vec::new());
++        image.common_owned = false;
++        image.decoded_by = None;
++        image.decoded_variant = None;
++        image.pending_decode = None;
++        binding.sampler_state = if row["name"]
++            .as_str()
++            .is_some_and(|n| n.starts_with("lightmap-"))
++        {
++            0x74
++        } else {
++            0x14
++        };
++        decoded.sampler = bevy::image::ImageSampler::Descriptor(asset_material::sampler_from_iw4(
++            binding.sampler_state,
++            levels,
++            false,
++        ));
++        image.decoded = Some(Arc::new(decoded));
++        binding.image = Some(definitions.images.len());
++        definitions.images.push(image);
++        let global = definitions.materials.len();
++        definitions.materials.push(material);
++        let local = prepared.materials.map_ids.len();
++        prepared.materials.map_ids.push(Some(global));
++        map_materials.push(local);
++    }
++    let mut draw = prepared
++        .world
++        .draw
++        .take()
++        .ok_or("native base map has no world")?;
++    draw.batches.clear();
++    draw.sky_model = None;
++    draw.lightmap = Ok(Vec::new());
++    draw.vertex_layer.clear();
++    draw.surface_vertex_layer.clear();
++    draw.surface_first_vertex.clear();
++    draw.surface_draw_fields.clear();
++    draw.surface_index_ranges.clear();
++    draw.surface_batch_ranges.clear();
++    draw.surface_materials.clear();
++    draw.surface_lightmapped.clear();
++    draw.surface_lightmap_indices.clear();
++    draw.surface_reflection_probes.clear();
++    draw.surface_primary_lights.clear();
++    draw.brush_models.clear();
++    draw.brush_model_bounds.clear();
++    draw.light_region_hulls = None;
++    draw.shadow_geometry.clear();
++    draw.sun_effects = None;
++    draw.sort_key_distortion = None;
++    draw.positions = positions;
++    draw.normals = normals;
++    draw.texture_uvs = uvs;
++    draw.lightmap_uvs = vec![[0.; 2]; n];
++    draw.colors = vec![[1.; 4]; n];
++    draw.tangents = draw
++        .normals
++        .iter()
++        .map(|normal| {
++            let v = bevy::prelude::Vec3::from_array(*normal).normalize_or_zero();
++            let t = if v.z.abs() > 0.9 {
++                v.cross(bevy::prelude::Vec3::Y)
++            } else {
++                v.cross(bevy::prelude::Vec3::Z)
++            }
++            .normalize_or_zero();
++            [t.x, t.y, t.z, 1.]
++        })
++        .collect();
++    draw.packed_indices = indices;
++    let mut packed = Vec::with_capacity(n);
++    for i in 0..n {
++        let mut v = [0u8; 44];
++        for k in 0..3 {
++            v[k * 4..k * 4 + 4].copy_from_slice(&draw.positions[i][k].to_le_bytes());
++        }
++        v[12..16].copy_from_slice(&1f32.to_le_bytes());
++        v[16..20].fill(255);
++        for k in 0..2 {
++            v[20 + k * 4..24 + k * 4].copy_from_slice(&draw.texture_uvs[i][k].to_le_bytes());
++        }
++        for (offset, vector) in [
++            (36, draw.normals[i]),
++            (
++                40,
++                [
++                    draw.tangents[i][0],
++                    draw.tangents[i][1],
++                    draw.tangents[i][2],
++                ],
++            ),
++        ] {
++            for k in 0..3 {
++                v[offset + k] = (vector[k] * 127. + 127.).clamp(0., 254.).round() as u8;
++            }
++            v[offset + 3] = 63;
++        }
++        packed.push(v);
++    }
++    draw.packed_vertices = WorldVertexPayload::Iw4(packed);
++    let count = rows.len();
++    let range = CameraSurfRange {
++        kind: CameraRangeKind::LitOpaque,
++        begin: 0,
++        end: count as u32,
++    };
++    draw.dpvs = DpvsWorldData::new(CameraSurfRanges::new(range, Vec::new()));
++    for row in rows {
++        let fv = integer(&row["first_vertex"])?;
++        let vc = integer(&row["vertex_count"])?;
++        let fi = integer(&row["first_index"])?;
++        let ic = integer(&row["index_count"])?;
++        let mi = integer(&row["material"])?;
++        if vc == 0
++            || fv + vc > n
++            || fi + ic > draw.packed_indices.len()
++            || ic % 3 != 0
++            || ic / 3 > 65535
++            || mi >= map_materials.len()
++        {
++            return Err("invalid local map surface range".into());
++        }
++        if draw.packed_indices[fi..fi + ic]
++            .iter()
++            .any(|v| (*v as usize) < fv || (*v as usize) >= fv + vc)
++        {
++            return Err("surface vertex outside range".into());
++        }
++        draw.surface_first_vertex.push(fv as u32);
++        draw.surface_draw_fields.push(SurfaceDrawFields {
++            first_vertex: fv as u32,
++            tri_count: (ic / 3) as u16,
++            base_index: fi as u32,
++            lightmap_index: 255,
++            reflection_probe_index: 0,
++            primary_light_index: 0,
++        });
++        draw.surface_index_ranges.push((fi as u32, ic as u32));
++        draw.surface_materials.push(Some(map_materials[mi]));
++        draw.surface_lightmapped.push(false);
++        draw.surface_lightmap_indices.push(255);
++        draw.surface_reflection_probes.push(0);
++        draw.surface_primary_lights.push(0);
++        draw.dpvs
++            .surface_bounds
++            .push(bounds(&draw.positions[fv..fv + vc]));
++    }
++    (draw.batches, draw.surface_batch_ranges) = make_material_batches(
++        &draw.positions,
++        &draw.normals,
++        &draw.tangents,
++        &draw.colors,
++        &draw.texture_uvs,
++        &draw.lightmap_uvs,
++        &draw.packed_indices,
++        &draw.surface_index_ranges,
++        &draw.surface_materials,
++        &draw.surface_lightmapped,
++        &draw.surface_lightmap_indices,
++        &draw.surface_primary_lights,
++        &draw.surface_reflection_probes,
++    );
++    let all_bounds = bounds(&draw.positions);
++    draw.dpvs.cell_count = 1;
++    draw.dpvs.nodes = vec![1];
++    draw.dpvs.cell_roots = vec![SurfRange {
++        start: 0,
++        count: count as u16,
++    }];
++    draw.dpvs.sorted_surf_index = (0..count as u16).collect();
++    draw.dpvs.static_surface_count = count;
++    draw.dpvs.static_surface_count_no_decal = count;
++    draw.dpvs.emissive_surfs_begin = 0;
++    draw.dpvs.emissive_surfs_end = 0;
++    draw.dpvs.lit_opaque_begin = 0;
++    draw.dpvs.lit_opaque_end = count as u32;
++    draw.dpvs.aabb_trees = vec![vec![AabbNodeView {
++        bounds: all_bounds,
++        child_count: 0,
++        children_offset: 0,
++        start_surf: 0,
++        surface_count: count as u16,
++        start_surf_no_decal: 0,
++        surface_count_no_decal: count as u16,
++        smodel_index_start: 0,
++        smodel_index_count: 0,
++    }]];
++    draw.dpvs.aabb_smodel_indices = vec![Vec::new()];
++    draw.dpvs.portals_per_cell = vec![Vec::new()];
++    draw.dpvs.cell_reflection_probes = vec![Vec::new()];
++    draw.capture = world_capture_from_casters(SurfaceCastsSunShadow::with_len(count));
++    let limits = array3(&pack["bounds"])?;
++    if limits.len() != 2 {
++        return Err("invalid local map bounds".into());
++    }
++    let (min, max) = (limits[0], limits[1]);
++    let world_bounds = Some([min[0], min[1], min[2], max[0], max[1], max[2]]);
++    draw.stats = WorldMeshStats {
++        vertices: n,
++        triangles: draw.packed_indices.len() / 3,
++        surfaces: count,
++        min,
++        max,
++        bounds: world_bounds,
++        ..Default::default()
++    };
++    let clip = collision(&pack["collision"])?;
++    let mut spawns = Vec::new();
++    let mut entities = String::from("{\n\"classname\" \"worldspawn\"\n}\n");
++    let spawn_rows = pack["spawns"].as_array().ok_or("missing local spawns")?;
++    let outdoors = |row: &&serde_json::Value| -> bool {
++        let Ok(p) = serde_json::from_value::<[f32; 3]>(row["origin"].clone()) else {
++            return false;
++        };
++        clip.box_sight_clear(
++            [p[0], p[1], p[2] + 64.0],
++            [p[0], p[1], p[2] + 640.0],
++            asset_world::MASK_PLAYER_SOLID,
++        )
++    };
++    let use_outdoors = std::env::var_os("IW4L_BOT_MATCH").is_some()
++        && spawn_rows.iter().filter(outdoors).count() >= 4;
++    for row in spawn_rows {
++        if use_outdoors && !outdoors(&row) {
++            continue;
++        }
++        let mut origin: [f32; 3] =
++            serde_json::from_value(row["origin"].clone()).map_err(|e| e.to_string())?;
++        let angles: [f32; 3] =
++            serde_json::from_value(row["angles"].clone()).map_err(|e| e.to_string())?;
++        if origin.iter().chain(angles.iter()).any(|v| !v.is_finite()) {
++            return Err("non-finite spawn".into());
++        }
++        origin[2] += 4.;
++        for classname in [
++            "mp_dm_spawn",
++            "mp_dm_spawn_start",
++            "mp_tdm_spawn",
++            if row["team"].as_u64().unwrap_or(0) == 1 {
++                "mp_tdm_spawn_allies_start"
++            } else {
++                "mp_tdm_spawn_axis_start"
++            },
++        ] {
++            entities.push_str(&format!("{{\n\"classname\" \"{classname}\"\n\"origin\" \"{} {} {}\"\n\"angles\" \"{} {} {}\"\n}}\n",origin[0],origin[1],origin[2],angles[0],angles[1],angles[2]));
++            spawns.push(SpawnPoint {
++                classname: classname.into(),
++                origin,
++                angles,
++                script_linkto: String::new(),
++                script_destructable_area: String::new(),
++            });
++        }
++    }
++    if spawns.is_empty() {
++        return Err("local map has no spawn points".into());
++    }
++    let first = &spawns[0];
++    entities.push_str(&format!("{{\n\"classname\" \"mp_global_intermission\"\n\"origin\" \"{} {} {}\"\n\"angles\" \"{} {} {}\"\n}}\n", first.origin[0], first.origin[1], first.origin[2]+60., first.angles[0], first.angles[1], first.angles[2]));
++    let intermission = Some(IntermissionView {
++        origin: [first.origin[0], first.origin[1], first.origin[2] + 60.],
++        angles: first.angles,
++    });
++    let impact_fx = prepared.world.impact_fx.take();
++    let primary_light = prepared.world.dynamic_light.take();
++    let reflection_probe_images = std::mem::take(&mut prepared.world.reflection_probe_images);
++    prepared.world = crate::PreparedWorld {
++        reflection_probe_images,
++        draw: Some(draw),
++        min,
++        max,
++        world_bounds,
++        intermission_view: intermission,
++        film_vision: Some(FilmVision::default()),
++        exp_fog: Some(ExpFog {
++            start_dist: 100000.,
++            halfway_dist: 1000000.,
++            color_rgb: [0.62, 0.64, 0.8],
++            max_opacity: 0.,
++            transition_time: 0.,
++            sun: None,
++            volumetric: None,
++        }),
++        light_grid: Some(asset_model::OwnedLightGrid {
++            mins: [0; 3],
++            maxs: [0; 3],
++            row_axis: 0,
++            col_axis: 1,
++            color_count: 1,
++            has_light_regions: false,
++            sun_primary_light_index: 1,
++            row_data_start: vec![255, 255],
++            raw_row_data: Vec::new(),
++            entries: Vec::new(),
++            colors: vec![180; lighting_iw4::LIGHT_GRID_COLORS_BYTE_COUNT],
++            color_encoding: asset_model::LightGridColorEncoding::Rgb8,
++        }),
++        impact_fx,
++        dynamic_light: primary_light,
++        ..Default::default()
++    };
++    prepared.clip = Some(Arc::new(clip));
++    prepared.prepared_map.spawns = spawns;
++    prepared.prepared_map.facts.minimap_corners = None;
++    prepared.prepared_map.facts.script_sound.ambient_alias = None;
++    if let Some(Ok(sound)) = prepared.sound.as_mut() {
++        sound.rawfiles.retain(|(_, path), _| {
++            !matches!(
++                path.as_str(),
++                "maps/createfx/mp_rust_fx.gsc" | "maps/mp/mp_rust_fx.gsc"
++            )
++        });
++    }
++    prepared.prepared_map.facts.compass = Default::default();
++    prepared.prepared_map.facts.objective_visuals = Default::default();
++    prepared.scripts.set_entities(entities);
++    prepared.scripts.insert_source(
++        "maps/mp/mp_rust",
++        "main() { maps\\mp\\_load::main(); }".into(),
++    );
++    diag::info!(
++        World,
++        "local map {name}: {n} vertices, {count} surfaces, {} spawn records",
++        prepared.prepared_map.spawns.len()
++    );
++    Ok(())
++}
++
++fn collision(pack: &Value) -> Result<ClipCollision, String> {
++    let verts = array3(&pack["positions"])?;
++    let indices: Vec<u16> =
++        serde_json::from_value(pack["indices"].clone()).map_err(|e| e.to_string())?;
++    if verts.is_empty()
++        || verts.len() > 65535
++        || indices.is_empty()
++        || indices.len() % 3 != 0
++        || indices.iter().any(|i| usize::from(*i) >= verts.len())
++    {
++        return Err("invalid local map collision".into());
++    }
++    let mut triangles: Vec<[u16; 3]> = indices
++        .chunks_exact(3)
++        .map(|v| [v[0], v[1], v[2]])
++        .collect();
++    triangles.sort_by(|a, b| {
++        let center = |t: &[u16; 3]| {
++            (verts[t[0] as usize][0] + verts[t[1] as usize][0] + verts[t[2] as usize][0]) / 3.
++        };
++        center(a).total_cmp(&center(b))
++    });
++    let mut mesh = clipmap_iw4::ClipMeshTables {
++        verts,
++        ..Default::default()
++    };
++    for group in triangles.chunks(32) {
++        let positions: Vec<_> = group
++            .iter()
++            .flatten()
++            .map(|i| mesh.verts[*i as usize])
++            .collect();
++        let b = bounds(&positions);
++        mesh.aabb_roots.push(mesh.aabb_trees.len() as u16);
++        mesh.aabb_trees.push(clipmap_iw4::ClipAabbNode {
++            origin: b.mid(),
++            half_size: b.half(),
++            material_index: 0,
++            child_count: 0,
++            u: mesh.partitions.len() as i32,
++        });
++        mesh.partitions.push(clipmap_iw4::ClipPartition {
++            tri_count: group.len() as u8,
++            first_tri: (mesh.tri_indices.len() / 3) as i32,
++            ..Default::default()
++        });
++        mesh.tri_indices.extend(group.iter().flatten());
++    }
++    let n = mesh.tri_count();
++    mesh.tri_surface_flags = vec![0; n];
++    mesh.tri_content_flags = vec![1; n];
++    mesh.tri_edge_is_walkable = vec![255; (n * 3).div_ceil(8)];
++    let b = bounds(&mesh.verts);
++    Ok(ClipCollision {
++        mesh: Arc::new(mesh),
++        tri_material_index: vec![0; n],
++        materials: vec![ClipMapMaterial {
++            name: "halo_level".into(),
++            surface_flags: 0,
++            content_flags: 1,
++        }],
++        cmodels: vec![ClipCmodel {
++            mins: b.mins(),
++            maxs: b.maxs(),
++            radius: 10000.,
++            first_brush: 0,
++            num_brushes: 0,
++        }],
++        ..Default::default()
++    })
++}
++
++const fn sm3_instruction(opcode: u16, operands: u8) -> u32 {
++    opcode as u32 | ((operands as u32) << 24)
++}
++
++fn water_program() -> Vec<u32> {
++    let mut words = vec![
++        0xffff0300,
++        sm3_instruction(0x1f, 2),
++        0x80000005,
++        0x900f0000,
++        sm3_instruction(0x1f, 2),
++        0x90000000,
++        0xa00f0800,
++    ];
++    for (register, values) in [
++        (221, [0.012f32, -0.020, 0.45, 0.55]),
++        (222, [1.83f32, 1.83, 0.0, 0.0]),
++        (223, [-0.018f32, 0.009, 0.0, 0.0]),
++    ] {
++        words.extend([sm3_instruction(0x51, 5), 0xa00f0000 | register]);
++        words.extend(values.map(f32::to_bits));
++    }
++    words.extend([
++        sm3_instruction(0x04, 4),
++        0x80030000,
++        0xa0ff00dc,
++        0xa0e400dd,
++        0x90e40000,
++        sm3_instruction(0x42, 3),
++        0x800f0001,
++        0x80e40000,
++        0xa0e40800,
++        sm3_instruction(0x05, 3),
++        0x80030000,
++        0x90e40000,
++        0xa0e400de,
++        sm3_instruction(0x04, 4),
++        0x80030000,
++        0xa0ff00dc,
++        0xa0e400df,
++        0x80e40000,
++        sm3_instruction(0x42, 3),
++        0x800f0002,
++        0x80e40000,
++        0xa0e40800,
++        sm3_instruction(0x05, 3),
++        0x800f0001,
++        0x80e40001,
++        0xa0aa00dd,
++        sm3_instruction(0x04, 4),
++        0x800f0800,
++        0x80e40002,
++        0xa0ff00dd,
++        0x80e40001,
++        0x0000ffff,
++    ]);
++    words
++}
++
++fn mip_chain(
++    mut pixels: Vec<u8>,
++    mut width: usize,
++    mut height: usize,
++    cutout: bool,
++) -> (Vec<u8>, u32) {
++    let linear: [f32; 256] = std::array::from_fn(|i| (i as f32 / 255.0).powf(2.2));
++    let coverage =
++        pixels.chunks_exact(4).filter(|p| p[3] >= 128).count() as f32 / (width * height) as f32;
++    let mut level = pixels.clone();
++    let mut levels = 1;
++    while width > 1 || height > 1 {
++        let (w, h) = ((width / 2).max(1), (height / 2).max(1));
++        let mut next = vec![0u8; w * h * 4];
++        for y in 0..h {
++            for x in 0..w {
++                let mut sum = [0f32; 4];
++                for dy in 0..2 {
++                    for dx in 0..2 {
++                        let i = (((y * 2 + dy).min(height - 1)) * width
++                            + (x * 2 + dx).min(width - 1))
++                            * 4;
++                        let alpha = level[i + 3] as f32 / 255.0;
++                        for k in 0..3 {
++                            sum[k] += linear[level[i + k] as usize] * alpha;
++                        }
++                        sum[3] += alpha;
++                    }
++                }
++                let i = (y * w + x) * 4;
++                if sum[3] > 0.0 {
++                    for k in 0..3 {
++                        next[i + k] = ((sum[k] / sum[3]).powf(1.0 / 2.2) * 255.0).round() as u8;
++                    }
++                }
++                next[i + 3] = (sum[3] * 63.75).round() as u8;
++            }
++        }
++        if cutout {
++            let (mut low, mut high) = (0.0f32, 4.0f32);
++            for _ in 0..10 {
++                let scale = (low + high) * 0.5;
++                let visible = next
++                    .chunks_exact(4)
++                    .filter(|p| p[3] as f32 * scale >= 128.0)
++                    .count() as f32
++                    / (w * h) as f32;
++                if visible < coverage {
++                    low = scale;
++                } else {
++                    high = scale;
++                }
++            }
++            for p in next.chunks_exact_mut(4) {
++                p[3] = (p[3] as f32 * high).min(255.0) as u8;
++            }
++        }
++        pixels.extend_from_slice(&next);
++        level = next;
++        (width, height) = (w, h);
++        levels += 1;
++    }
++    (pixels, levels)
++}
+diff --git a/crates/assets/src/model_portraits.rs b/crates/assets/src/model_portraits.rs
+new file mode 100644
+index 0000000..daa52f4
+--- /dev/null
++++ b/crates/assets/src/model_portraits.rs
+@@ -0,0 +1,183 @@
++use bevy::prelude::*;
++
++pub fn player_portraits(
++    bodies: &asset_model::BodyMeshCatalog,
++    materials: &asset_material::MaterialDefinitions,
++) -> [Option<Image>; 2] {
++    [
++        render(bodies, materials, false),
++        render(bodies, materials, true),
++    ]
++}
++
++fn render(
++    bodies: &asset_model::BodyMeshCatalog,
++    materials: &asset_material::MaterialDefinitions,
++    axis: bool,
++) -> Option<Image> {
++    use bevy::asset::RenderAssetUsages;
++    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
++    const W: usize = 144;
++    const H: usize = 160;
++    let kit = bodies.kits().kit(axis)?;
++    let body = bodies.get(&kit.body)?;
++    let head_transform = xmodel_runtime::tp_head_attach_tag(&body.skel.bone_names)
++        .and_then(|tag| body.skel.bone_names.iter().position(|n| n == tag))
++        .and_then(|i| body.skel.bones.get(i))
++        .map(|b| b.to_mat4())
++        .unwrap_or(Mat4::IDENTITY);
++    let mut meshes = Vec::new();
++    for name in std::iter::once(&kit.body).chain(kit.head.as_ref()) {
++        let Some(entry) = bodies.get(name) else {
++            continue;
++        };
++        let transform = if name == &kit.body {
++            Mat4::IDENTITY
++        } else {
++            head_transform
++        };
++        let positions: Vec<Vec3> = entry
++            .skel
++            .positions
++            .iter()
++            .map(|p| transform.transform_point3(Vec3::from_array(*p)))
++            .collect();
++        meshes.push((entry, transform, positions));
++    }
++    let top = meshes
++        .iter()
++        .flat_map(|(_, _, p)| p.iter())
++        .map(|p| p.z)
++        .fold(f32::NEG_INFINITY, f32::max);
++    let bottom = meshes
++        .iter()
++        .flat_map(|(_, _, p)| p.iter())
++        .map(|p| p.z)
++        .fold(f32::INFINITY, f32::min);
++    if !top.is_finite() || top <= bottom {
++        return None;
++    }
++    let span = (top - bottom) * 0.51;
++    let scale = (H as f32 - 12.0) / span;
++    let toward = Vec3::new(0.95, -0.312, 0.0).normalize();
++    let right = Vec3::new(0.312, 0.95, 0.0).normalize();
++    let light = Vec3::new(0.7, -0.45, 0.65).normalize();
++    let mut rgba = vec![0u8; W * H * 4];
++    let mut depth = vec![f32::NEG_INFINITY; W * H];
++    for (entry, transform, positions) in meshes {
++        let s = &entry.skel;
++        for surface in s.surfaces_for_lod(0) {
++            let texture = entry
++                .material_keys
++                .get(surface)
++                .and_then(Option::as_ref)
++                .and_then(|key| materials.material_index_by_key(key))
++                .and_then(|i| {
++                    materials.materials[i.order()]
++                        .textures
++                        .iter()
++                        .find(|t| t.semantic == asset_material::TS_COLOR_MAP)
++                })
++                .and_then(|t| t.image)
++                .and_then(|i| materials.images[i].decoded.as_ref())
++                .and_then(|img| asset_material::decoded_image_top_level_rgba8(img).ok());
++            let (start, count) = s.surface_index_ranges[surface];
++            for tri in s.indices[start..start + count].chunks_exact(3) {
++                let ids = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
++                let p = ids.map(|i| {
++                    Vec3::new(
++                        W as f32 * 0.5 + positions[i].dot(right) * scale,
++                        6.0 + (top - positions[i].z) * scale,
++                        positions[i].dot(toward),
++                    )
++                });
++                let edge = |a: Vec3, b: Vec3, x: f32, y: f32| {
++                    (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)
++                };
++                let area = edge(p[0], p[1], p[2].x, p[2].y);
++                if area.abs() < 0.001 {
++                    continue;
++                }
++                let minx = p
++                    .iter()
++                    .map(|p| p.x)
++                    .fold(f32::INFINITY, f32::min)
++                    .floor()
++                    .max(0.0) as usize;
++                let maxx = p
++                    .iter()
++                    .map(|p| p.x)
++                    .fold(f32::NEG_INFINITY, f32::max)
++                    .ceil()
++                    .clamp(0.0, (W - 1) as f32) as usize;
++                let miny = p
++                    .iter()
++                    .map(|p| p.y)
++                    .fold(f32::INFINITY, f32::min)
++                    .floor()
++                    .max(0.0) as usize;
++                let maxy = p
++                    .iter()
++                    .map(|p| p.y)
++                    .fold(f32::NEG_INFINITY, f32::max)
++                    .ceil()
++                    .clamp(0.0, (H - 1) as f32) as usize;
++                for y in miny..=maxy {
++                    for x in minx..=maxx {
++                        let a = edge(p[1], p[2], x as f32 + 0.5, y as f32 + 0.5) / area;
++                        let b = edge(p[2], p[0], x as f32 + 0.5, y as f32 + 0.5) / area;
++                        let c = 1.0 - a - b;
++                        if a < 0.0 || b < 0.0 || c < 0.0 {
++                            continue;
++                        }
++                        let z = p[0].z * a + p[1].z * b + p[2].z * c;
++                        let at = y * W + x;
++                        if z <= depth[at] {
++                            continue;
++                        }
++                        let weights = [a, b, c];
++                        let mut uv = Vec2::ZERO;
++                        let mut normal = Vec3::ZERO;
++                        for k in 0..3 {
++                            uv += Vec2::from_array(s.uvs[ids[k]]) * weights[k];
++                            normal += transform
++                                .transform_vector3(Vec3::from_array(s.normals[ids[k]]))
++                                * weights[k];
++                        }
++                        let pixel = texture
++                            .as_ref()
++                            .map(|(w, h, pixels)| {
++                                let u = ((uv.x.rem_euclid(1.0) * *w as f32) as usize)
++                                    .min(*w as usize - 1);
++                                let v = ((uv.y.rem_euclid(1.0) * *h as f32) as usize)
++                                    .min(*h as usize - 1);
++                                let t = (v * *w as usize + u) * 4;
++                                [pixels[t], pixels[t + 1], pixels[t + 2], pixels[t + 3]]
++                            })
++                            .unwrap_or([155, 160, 145, 255]);
++                        if pixel[3] < 100 {
++                            continue;
++                        }
++                        let shade = 0.52 + 0.65 * normal.normalize_or_zero().dot(light).max(0.0);
++                        for k in 0..3 {
++                            rgba[at * 4 + k] = (pixel[k] as f32 * shade).min(255.0) as u8;
++                        }
++                        rgba[at * 4 + 3] = 255;
++                        depth[at] = z;
++                    }
++                }
++            }
++        }
++    }
++    Some(Image::new(
++        Extent3d {
++            width: W as u32,
++            height: H as u32,
++            depth_or_array_layers: 1,
++        },
++        TextureDimension::D2,
++        rgba,
++        TextureFormat::Rgba8UnormSrgb,
++        RenderAssetUsages::default(),
++    ))
++}
+diff --git a/crates/bootstrap/src/bot_director.rs b/crates/bootstrap/src/bot_director.rs
+new file mode 100644
+index 0000000..858bbab
+--- /dev/null
++++ b/crates/bootstrap/src/bot_director.rs
+@@ -0,0 +1,146 @@
++use bevy::prelude::*;
++
++use super::{BOT_COUNT, TEAM_SIZE, VIEW_COUNT};
++
++#[derive(Clone, Copy, Default)]
++pub(super) struct FightView {
++    pub score: f32,
++    pub opponent: Option<u32>,
++    pub aim_degrees: f32,
++    pub visible_samples: u8,
++}
++
++pub(super) fn fight_views(
++    presented: &net::PresentedSnapshot,
++    roster: &bots::BotRoster,
++    clip: Option<&asset_world::ClipCollision>,
++) -> [FightView; VIEW_COUNT] {
++    std::array::from_fn(|id| {
++        let mut result = FightView {
++            score: -1.0,
++            ..default()
++        };
++        let Some(ps) = presented
++            .player(sim::ClientId(id as u32))
++            .filter(|p| id != 0 && p.health > 0 && p.pm_type < 5)
++        else {
++            return result;
++        };
++        result.score = 0.0;
++        let eye = Vec3::from_array(ps.origin) + Vec3::Z * ps.view_height_current;
++        let (sp, cp) = ps.viewangles[0].to_radians().sin_cos();
++        let (sy, cy) = ps.viewangles[1].to_radians().sin_cos();
++        let forward = Vec3::new(cp * cy, cp * sy, -sp);
++        for enemy in 1..=BOT_COUNT as usize {
++            if (enemy <= TEAM_SIZE as usize) == (id <= TEAM_SIZE as usize) {
++                continue;
++            }
++            let Some(other) = presented
++                .player(sim::ClientId(enemy as u32))
++                .filter(|p| p.health > 0 && p.pm_type < 5)
++            else {
++                continue;
++            };
++            let feet = Vec3::from_array(other.origin);
++            let distance = eye.distance(feet);
++            let mut angle = 180.0_f32;
++            let mut visible = 0_u8;
++            for height in [0.5, 0.8, 1.0] {
++                let point = feet + Vec3::Z * other.view_height_current * height;
++                let degrees = forward
++                    .dot((point - eye).normalize_or_zero())
++                    .clamp(-1.0, 1.0)
++                    .acos()
++                    .to_degrees();
++                if degrees > 40.0 {
++                    continue;
++                }
++                if clip.is_some_and(|clip| {
++                    clip.sweep_box(
++                        eye.to_array(),
++                        point.to_array(),
++                        [0.0; 3],
++                        [0.0; 3],
++                        sim::MASK_SHOT & !0x10,
++                    )
++                    .fraction
++                        >= 0.999
++                }) {
++                    visible += 1;
++                    angle = angle.min(degrees);
++                }
++            }
++            let score = if visible > 0 {
++                let centered = (-(angle / 18.0).powi(2)).exp();
++                let firing = roster
++                    .bots
++                    .iter()
++                    .find(|b| b.id.0 == id as u32)
++                    .and_then(|b| b.brain.as_ref())
++                    .is_some_and(|b| b.intent().fire);
++                100.0
++                    + centered * 200.0
++                    + visible as f32 * 12.0
++                    + ps.f_weapon_pos_frac * 20.0
++                    + if firing { 8.0 } else { 0.0 }
++            } else {
++                (30.0 - distance / 100.0).max(0.0)
++            };
++            if score > result.score {
++                result = FightView {
++                    score,
++                    opponent: Some(enemy as u32),
++                    aim_degrees: angle,
++                    visible_samples: visible,
++                };
++            }
++        }
++        result
++    })
++}
++
++#[derive(Default)]
++pub(super) struct Director {
++    candidate: Option<(u32, f32)>,
++}
++
++impl Director {
++    pub fn reset(&mut self) {
++        self.candidate = None;
++    }
++
++    pub fn choose(
++        &mut self,
++        views: &[FightView; VIEW_COUNT],
++        current: u32,
++        now: f32,
++        last_cut: f32,
++    ) -> Option<u32> {
++        let (best, score) = (1..=BOT_COUNT)
++            .map(|id| (id, views[id as usize].score))
++            .max_by(|a, b| a.1.total_cmp(&b.1))?;
++        let active = views[current as usize].score;
++        let margin = if score < 100.0 { 3.0 } else { 35.0 };
++        if best == current
++            || score < 0.0
++            || (current != 0 && active >= 0.0 && score < active + margin)
++        {
++            self.candidate = None;
++            return None;
++        }
++        let (_, since) = *self.candidate.get_or_insert((best, now));
++        if self.candidate.is_some_and(|(id, _)| id != best) {
++            self.candidate = Some((best, now));
++            return None;
++        }
++        let urgent = current == 0 || active < 0.0 || (active < 100.0 && score >= 200.0);
++        let hold = if urgent { 0.6 } else { 1.5 };
++        let settle = if score >= 100.0 { 0.15 } else { 0.8 };
++        if now - last_cut >= hold && now - since >= settle {
++            self.candidate = None;
++            Some(best)
++        } else {
++            None
++        }
++    }
++}
+diff --git a/crates/bootstrap/src/bot_match.rs b/crates/bootstrap/src/bot_match.rs
+new file mode 100644
+index 0000000..90d145b
+--- /dev/null
++++ b/crates/bootstrap/src/bot_match.rs
+@@ -0,0 +1,334 @@
++//! Opt-in autonomous crossover match and a freely movable spectator camera.
++use bevy::prelude::*;
++#[path = "bot_director.rs"]
++mod director;
++#[path = "bot_portraits.rs"]
++mod portraits;
++use frame::{AppScreen, ClientSet, RenderSet};
++use render_frontend::adapters::anim::fpv_present::{FpvGeometrySet, FpvPlacementSet};
++use render_frontend::{
++    FpvDrawPlan,
++    prepare::scene::camera::{FlyCamera, FpvLens, SimCamera},
++};
++
++const TEAM_SIZE: u32 = 4;
++const BOT_COUNT: u32 = TEAM_SIZE * 2;
++const VIEW_COUNT: usize = BOT_COUNT as usize + 1;
++
++#[derive(Resource, Default)]
++struct BotMatch {
++    started: bool,
++    watching: bool,
++    follow: u32,
++    third_person: bool,
++    auto: bool,
++    last_cut: f32,
++    director: director::Director,
++    views: [director::FightView; VIEW_COUNT],
++    next_evaluation: f32,
++    overview: Option<Transform>,
++}
++
++pub(crate) fn install(app: &mut App) {
++    if std::env::var_os("IW4L_BOT_MATCH").is_none() {
++        return;
++    }
++    app.init_resource::<BotMatch>()
++        .init_resource::<net::LiveSpectatorTarget>();
++    app.world_mut()
++        .resource_mut::<console::ConsoleRegistry>()
++        .register(
++            console::CommandSpec::new("watch")
++                .usage("watch next|overview|1..8|third|first|toggle|auto|manual|status — native bot spectator view"),
++        );
++    app.add_systems(Update, (setup, cycle_view).chain().in_set(ClientSet::Input));
++    portraits::install(app);
++    app.add_systems(
++        Update,
++        camera
++            .in_set(ClientSet::Present)
++            .before(RenderSet::FrontendPrepare),
++    );
++    app.add_systems(
++        Update,
++        hide_viewmodel
++            .in_set(ClientSet::Present)
++            .after(FpvGeometrySet)
++            .after(FpvPlacementSet)
++            .after(frame::WorkerCmdSet::AddSceneEnt)
++            .in_set(render_frontend::assemble::ViewmodelDrawReady),
++    );
++}
++
++fn setup(
++    screen: Res<AppScreen>,
++    mut state: ResMut<BotMatch>,
++    mut queue: ResMut<console::ConsoleQueue>,
++    world: Option<Res<net::AuthorityWorld>>,
++    local: Res<net::LocalPresentClient>,
++    mut actions: ResMut<net::ClientActionInbox>,
++    mut ids: ResMut<net::ActionRequestIds>,
++    mut cameras: Query<(&mut Transform, &mut FlyCamera)>,
++) {
++    if !state.started {
++        if *screen != AppScreen::InGame {
++            return;
++        }
++        queue.push_line(&format!(
++            "bot quickscope {TEAM_SIZE}; bot spartan {TEAM_SIZE}"
++        ));
++        state.started = true;
++    }
++    if state.watching {
++        return;
++    }
++    let Some(world) = world else {
++        return;
++    };
++    if world.0.player_count() < VIEW_COUNT {
++        return;
++    }
++    let action = sim::ClientAction::MenuResponse {
++        request_id: ids.allocate(),
++        menu: sim::menu_response_field("team_marinesopfor").unwrap(),
++        response: sim::menu_response_field("spectator").unwrap(),
++    };
++    if actions.push(local.0, action).is_err() {
++        return;
++    }
++    let points = world.0.authored_spawn_origins();
++    let mut lo = Vec3::splat(f32::MAX);
++    let mut hi = Vec3::splat(f32::MIN);
++    for p in points {
++        let p = Vec3::from_array(p);
++        lo = lo.min(p);
++        hi = hi.max(p);
++    }
++    if lo.is_finite() && hi.is_finite() && lo.x <= hi.x {
++        let center = (lo + hi) * 0.5;
++        let eye = center + Vec3::new(-600.0, -1000.0, 1500.0);
++        let overview = Transform::from_translation(eye).looking_at(center, Vec3::Z);
++        state.overview = Some(overview);
++        for (mut pose, mut fly) in &mut cameras {
++            *pose = overview;
++            fly.pitch = 0.0;
++            fly.yaw = 0.0;
++        }
++    }
++    state.watching = true;
++    diag::info!(
++        Launch,
++        "BOT MATCH: autonomous 4v4 active; click/F6 cycles eight player views + overview; F5 overview; V/F7 first/third person; X auto-director; WASD/QE fly, arrows turn"
++    );
++}
++
++fn cycle_view(
++    mut state: ResMut<BotMatch>,
++    keys: Res<ButtonInput<KeyCode>>,
++    mouse: Res<ButtonInput<MouseButton>>,
++    screen: Res<AppScreen>,
++    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
++    mut commands: MessageReader<console::ConsoleCommand>,
++    mut lenses: Query<&mut Projection, With<FpvLens>>,
++    mut target: ResMut<net::LiveSpectatorTarget>,
++    mut sim_camera: ResMut<SimCamera>,
++    mut cameras: Query<&mut Transform, With<FlyCamera>>,
++    time: Res<Time>,
++    roster: Res<bots::BotRoster>,
++    presented: Res<net::PresentedSnapshot>,
++    clip: Res<render_frontend::adapters::anim::dyn_ent::DynEntPhysClip>,
++    scene_view: Res<render_frontend::prepare::scene::view_parms::PreparedSceneView>,
++    bodies: Query<(&net::CEntity, &Transform), Without<FlyCamera>>,
++) {
++    if !state.watching || *screen != AppScreen::InGame {
++        return;
++    }
++    let mut cycle = mouse.just_pressed(MouseButton::Left) || keys.just_pressed(KeyCode::F6);
++    let mut direct = keys.just_pressed(KeyCode::F5).then_some(0);
++    let now = time.elapsed_secs();
++    let mut auto = keys.just_pressed(KeyCode::KeyX).then_some(!state.auto);
++    let mut status = false;
++    let mut perspective = (keys.just_pressed(KeyCode::KeyV) || keys.just_pressed(KeyCode::F7))
++        .then_some(!state.third_person);
++    for command in commands.read().filter(|command| command.name == "watch") {
++        match command.args.first().map(String::as_str) {
++            Some("next") | None => cycle = true,
++            Some("overview") | Some("0") => direct = Some(0),
++            Some("third") => perspective = Some(true),
++            Some("first") => perspective = Some(false),
++            Some("toggle") => perspective = Some(!state.third_person),
++            Some("auto") => auto = Some(true),
++            Some("manual") => auto = Some(false),
++            Some("status") => status = true,
++            Some(value) => match value.parse::<u32>() {
++                Ok(n @ 1..=BOT_COUNT) => direct = Some(n),
++                _ => diag::warn!(
++                    Launch,
++                    "usage: watch next|overview|1..8|third|first|toggle|auto|manual|status"
++                ),
++            },
++        }
++    }
++    if let Some(enabled) = auto {
++        state.auto = enabled;
++        state.director.reset();
++        state.last_cut = now - 3.0;
++    }
++    if cycle || direct.is_some() {
++        state.auto = false;
++        state.director.reset();
++        state.last_cut = now;
++    }
++    if (state.auto && now >= state.next_evaluation) || status {
++        state.views = director::fight_views(&presented, &roster, clip.0.as_deref());
++        state.next_evaluation = now + 0.1;
++    }
++    if state.auto {
++        let views = state.views;
++        let current = state.follow;
++        let last_cut = state.last_cut;
++        if let Some(id) = state.director.choose(&views, current, now, last_cut) {
++            direct = Some(id);
++            state.last_cut = now;
++            let view = views[id as usize];
++            diag::info!(
++                Launch,
++                "BOT DIRECTOR: {} -> {} score={:.1}->{:.1} enemy={:?} aim={:.1} visible={}/3",
++                current,
++                id,
++                views[current as usize].score,
++                view.score,
++                view.opponent,
++                view.aim_degrees,
++                view.visible_samples
++            );
++        }
++    }
++    if let Some(third) = perspective {
++        state.third_person = third;
++    }
++    if cycle {
++        state.follow = (state.follow + 1) % VIEW_COUNT as u32;
++    }
++    if let Some(n) = direct {
++        state.follow = n;
++    }
++    if state.follow == 0 && (cycle || direct.is_some()) {
++        for mut projection in &mut lenses {
++            if let Projection::Perspective(p) = &mut *projection {
++                p.fov = 60.0_f32.to_radians();
++            }
++        }
++        if let Some(overview) = state.overview {
++            for mut pose in &mut cameras {
++                *pose = overview;
++            }
++        }
++    }
++    if status {
++        if let Some(ps) = presented.player(sim::ClientId(state.follow)) {
++            for pose in &mut cameras {
++                diag::info!(
++                    Launch,
++                    "BOT CAMERA: follow={} third={} auto={} health={} feet={:?} height={} angles={:?} eye={:?} direction={:?}",
++                    state.follow,
++                    state.third_person,
++                    state.auto,
++                    ps.health,
++                    ps.origin,
++                    ps.view_height_current,
++                    ps.viewangles,
++                    pose.translation,
++                    pose.forward()
++                );
++            }
++        }
++        for (entity, pose) in &bodies {
++            if entity.number() as u32 == state.follow {
++                let feet = pose.translation;
++                let head = feet + Vec3::Z * 70.0;
++                diag::info!(
++                    Launch,
++                    "BOT FRAMING: body={:?} render_eye={:?} render_forward={:?} vertical_fov={:.1} feet_ndc={:?} head_ndc={:?}",
++                    feet,
++                    scene_view.eye,
++                    scene_view.forward,
++                    scene_view.fov.to_degrees(),
++                    scene_view.clip_from_world.project_point3(feet),
++                    scene_view.clip_from_world.project_point3(head)
++                );
++            }
++        }
++        for id in 1..VIEW_COUNT {
++            let view = state.views[id];
++            diag::info!(
++                Launch,
++                "BOT SIGHT: id={} score={:.1} enemy={:?} aim={:.1} visible={}/3",
++                id,
++                view.score,
++                view.opponent,
++                view.aim_degrees,
++                view.visible_samples
++            );
++        }
++        for bot in &roster.bots {
++            if let Some(brain) = &bot.brain {
++                let cmd = brain.last_cmd();
++                if let Some(ps) = presented.player(bot.id) {
++                    diag::info!(
++                        Launch,
++                        "BOT INPUT: id={} hp={} position={:?} velocity={:?} ground={} ads={} move=({}, {}) buttons={} task={:?}",
++                        bot.id.0,
++                        ps.health,
++                        ps.origin,
++                        ps.velocity,
++                        ps.ground_entity_num,
++                        ps.f_weapon_pos_frac,
++                        cmd.forwardmove,
++                        cmd.rightmove,
++                        cmd.buttons,
++                        brain.task()
++                    );
++                }
++            }
++        }
++    }
++    target.0 = (state.follow != 0).then_some(sim::ClientId(state.follow));
++    target.1 = state.third_person;
++    sim_camera.enabled = state.follow != 0;
++    sim_camera.freeze_fly = state.follow != 0;
++    if cycle || direct.is_some() || perspective.is_some() || auto.is_some() {
++        let label = if state.follow == 0 {
++            "overview".to_owned()
++        } else if state.follow <= TEAM_SIZE {
++            format!("MW2 soldier {}", state.follow)
++        } else {
++            format!("Spartan {}", state.follow - TEAM_SIZE)
++        };
++        for mut window in &mut windows {
++            window.title = format!(
++                "iw4l — Halo / MW2 4v4 — {label} | click: next · V: first/third · X: auto-director"
++            );
++        }
++        diag::info!(
++            Launch,
++            "BOT VIEW: {label}; third_person={}; auto={}",
++            state.third_person,
++            state.auto
++        );
++    }
++}
++
++fn camera(state: Res<BotMatch>, mut camera: ResMut<SimCamera>) {
++    if state.watching {
++        camera.enabled = state.follow != 0;
++        camera.freeze_fly = state.follow != 0;
++    }
++}
++
++fn hide_viewmodel(state: Res<BotMatch>, mut plan: ResMut<FpvDrawPlan>) {
++    if state.watching && (state.follow == 0 || state.third_person) {
++        plan.drawgun = Some(0);
++        plan.visible = false;
++    }
++}
+diff --git a/crates/bootstrap/src/bot_portraits.rs b/crates/bootstrap/src/bot_portraits.rs
+new file mode 100644
+index 0000000..2909a6f
+--- /dev/null
++++ b/crates/bootstrap/src/bot_portraits.rs
+@@ -0,0 +1,135 @@
++use bevy::prelude::*;
++
++use super::{BotMatch, TEAM_SIZE};
++
++#[derive(Resource, Default)]
++struct Portraits(Option<[Handle<Image>; 2]>);
++#[derive(Component)]
++struct Badge;
++#[derive(Component)]
++struct Bust;
++#[derive(Component)]
++struct Caption;
++
++pub(super) fn install(app: &mut App) {
++    app.init_resource::<Portraits>();
++    app.add_systems(
++        Update,
++        (prepare, refresh).chain().in_set(frame::ClientSet::Present),
++    );
++}
++
++fn prepare(
++    mut commands: Commands,
++    state: Res<BotMatch>,
++    bodies: Option<Res<assets::PreparedBodies>>,
++    mut portraits: ResMut<Portraits>,
++    mut images: ResMut<Assets<Image>>,
++    font: Res<ui::GameUiFont>,
++) {
++    if !state.watching || portraits.0.is_some() {
++        return;
++    }
++    let Some(bodies) = bodies else {
++        return;
++    };
++    let (Some(soldier), Some(spartan)) = (bodies.1[0].clone(), bodies.1[1].clone()) else {
++        return;
++    };
++    let handles = [images.add(soldier), images.add(spartan)];
++    portraits.0 = Some(handles.clone());
++    commands
++        .spawn((
++            Badge,
++            Node {
++                position_type: PositionType::Absolute,
++                left: Val::Percent(27.0),
++                bottom: Val::Percent(3.5),
++                height: Val::Px(44.0),
++                width: Val::Px(185.0),
++                align_items: AlignItems::Center,
++                column_gap: Val::Px(6.0),
++                padding: UiRect::right(Val::Px(12.0)),
++                ..default()
++            },
++            GlobalZIndex(50),
++            BackgroundColor(Color::srgba(0.025, 0.04, 0.055, 0.8)),
++        ))
++        .with_children(|parent| {
++            parent.spawn((
++                Bust,
++                ImageNode::new(handles[0].clone()),
++                Node {
++                    width: Val::Px(40.0),
++                    height: Val::Px(44.0),
++                    flex_shrink: 0.0,
++                    ..default()
++                },
++            ));
++            parent.spawn((
++                Caption,
++                Text::new(""),
++                ui::game_text_font(&font.0, 9.0),
++                TextColor(Color::srgb(0.92, 0.95, 0.98)),
++            ));
++        });
++}
++
++fn refresh(
++    state: Res<BotMatch>,
++    screen: Res<frame::AppScreen>,
++    portraits: Res<Portraits>,
++    snapshot: Res<net::PresentedSnapshot>,
++    mut badges: Query<(&mut Node, &mut BackgroundColor), With<Badge>>,
++    mut busts: Query<(&mut Node, &mut ImageNode), (With<Bust>, Without<Badge>)>,
++    mut captions: Query<&mut Text, With<Caption>>,
++) {
++    let spartan = state.follow > TEAM_SIZE;
++    for (mut node, mut color) in &mut badges {
++        node.display = if state.watching && *screen == frame::AppScreen::InGame {
++            Display::Flex
++        } else {
++            Display::None
++        };
++        color.0 = if spartan {
++            Color::srgba(0.025, 0.08, 0.18, 0.82)
++        } else {
++            Color::srgba(0.07, 0.085, 0.035, 0.82)
++        };
++    }
++    for (mut node, mut image) in &mut busts {
++        node.display = if state.follow == 0 {
++            Display::None
++        } else {
++            Display::Flex
++        };
++        if let Some(handles) = &portraits.0 {
++            image.image = handles[usize::from(spartan)].clone();
++        }
++    }
++    let name = snapshot
++        .snapshot()
++        .and_then(|s| s.meta.for_client(sim::ClientId(state.follow)))
++        .map(|meta| {
++            String::from_utf8_lossy(&meta.name)
++                .trim_end_matches('\0')
++                .to_owned()
++        })
++        .unwrap_or_else(|| format!("Player {}", state.follow));
++    let label = if state.follow == 0 {
++        "  BATTLEFIELD OVERVIEW\n  Click: next · X: auto".to_owned()
++    } else {
++        format!(
++            "{name}\n{} · {} PERSON{}\nV: camera · X: {}",
++            if spartan { "SPARTAN" } else { "COD" },
++            if state.third_person { "3RD" } else { "1ST" },
++            if state.auto { " · AUTO" } else { "" },
++            if state.auto { "manual" } else { "auto" }
++        )
++    };
++    for mut caption in &mut captions {
++        if caption.0 != label {
++            caption.0 = label.clone();
++        }
++    }
 +}
 diff --git a/crates/bootstrap/src/cinema.rs b/crates/bootstrap/src/cinema.rs
 new file mode 100644
@@ -2558,4 +5896,284 @@ index 0000000..1b7e964
 +        owner.transform = *xf;
 +        owner.lighting_origin = xf.translation.to_array();
 +    }
++}
+diff --git a/crates/render_gpu/src/drawsurf/clarity.rs b/crates/render_gpu/src/drawsurf/clarity.rs
+new file mode 100644
+index 0000000..979d35a
+--- /dev/null
++++ b/crates/render_gpu/src/drawsurf/clarity.rs
+@@ -0,0 +1,197 @@
++use super::{PublishedRenderFrame, postfx::PostFxSet, scene_depth::SceneDepthTexture};
++use bevy::core_pipeline::{Core3d, Core3dSystems};
++use bevy::prelude::*;
++use bevy::render::render_resource::binding_types::{
++    sampler, texture_2d, texture_depth_2d, uniform_buffer_sized,
++};
++use bevy::render::render_resource::*;
++use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
++use bevy::render::view::ViewTarget;
++use bevy::render::{RenderApp, RenderStartup};
++use std::num::NonZeroU64;
++
++#[derive(Resource)]
++struct ClarityGpu {
++    pipeline: CachedRenderPipelineId,
++    layout: BindGroupLayoutDescriptor,
++    sampler: Sampler,
++    params: Buffer,
++    contact_shading: bool,
++}
++
++#[repr(C)]
++#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
++struct Params {
++    world_from_clip: [[f32; 4]; 4],
++    camera: [f32; 4],
++    viewport: [f32; 4],
++    tuning: [f32; 4],
++}
++
++fn init(
++    mut commands: Commands,
++    assets: Res<AssetServer>,
++    device: Res<RenderDevice>,
++    cache: Res<PipelineCache>,
++) {
++    let layout = BindGroupLayoutDescriptor::new(
++        "native_clarity",
++        &BindGroupLayoutEntries::sequential(
++            ShaderStages::FRAGMENT,
++            (
++                texture_2d(TextureSampleType::Float { filterable: true }),
++                sampler(SamplerBindingType::Filtering),
++                texture_depth_2d(),
++                uniform_buffer_sized(false, NonZeroU64::new(std::mem::size_of::<Params>() as u64)),
++            ),
++        ),
++    );
++    let shader = assets.load("embedded://render_gpu/drawsurf/clarity.wgsl");
++    let pipeline = cache.queue_render_pipeline(RenderPipelineDescriptor {
++        label: Some("native_clarity".into()),
++        layout: vec![layout.clone()],
++        immediate_size: 0,
++        vertex: VertexState {
++            shader: shader.clone(),
++            shader_defs: vec![],
++            entry_point: Some("vertex".into()),
++            buffers: vec![],
++        },
++        fragment: Some(FragmentState {
++            shader,
++            shader_defs: vec![],
++            entry_point: Some("fragment".into()),
++            targets: vec![Some(ColorTargetState {
++                format: TextureFormat::Rgba8Unorm,
++                blend: None,
++                write_mask: ColorWrites::ALL,
++            })],
++        }),
++        primitive: PrimitiveState {
++            cull_mode: None,
++            ..default()
++        },
++        depth_stencil: None,
++        multisample: MultisampleState::default(),
++        zero_initialize_workgroup_memory: false,
++    });
++    commands.insert_resource(ClarityGpu {
++        pipeline,
++        layout,
++        sampler: device.create_sampler(&SamplerDescriptor {
++            mag_filter: FilterMode::Linear,
++            min_filter: FilterMode::Linear,
++            ..default()
++        }),
++        params: device.create_buffer(&BufferDescriptor {
++            label: Some("native_clarity_params"),
++            size: std::mem::size_of::<Params>() as u64,
++            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
++            mapped_at_creation: false,
++        }),
++        contact_shading: std::env::var_os("IW4L_LOCAL_MAP").is_some(),
++    });
++}
++
++fn draw(
++    view: ViewQuery<(&ViewTarget, &SceneDepthTexture)>,
++    gpu: Res<ClarityGpu>,
++    frame: Res<PublishedRenderFrame>,
++    device: Res<RenderDevice>,
++    queue: Res<RenderQueue>,
++    cache: Res<PipelineCache>,
++    mut context: RenderContext,
++    mut announced: Local<bool>,
++) {
++    let (target, depth) = view.into_inner();
++    if target.main_texture_format() != TextureFormat::Rgba8Unorm {
++        return;
++    }
++    let Some(pipeline) = cache.get_render_pipeline(gpu.pipeline) else {
++        return;
++    };
++    let Some(clip) = frame.exec_frame.clip_from_world else {
++        return;
++    };
++    let camera = frame.exec_frame.view_origin;
++    let size = depth.texture.size();
++    let params = Params {
++        world_from_clip: clip.inverse().to_cols_array_2d(),
++        camera: [camera.x, camera.y, camera.z, 1.0],
++        viewport: [
++            size.width as f32,
++            size.height as f32,
++            1.0 / size.width as f32,
++            1.0 / size.height as f32,
++        ],
++        tuning: [
++            if gpu.contact_shading { 1.0 } else { 0.0 },
++            frame
++                .exec_frame
++                .clip_from_view
++                .map_or(1.0, |m| m.y_axis.y.abs()),
++            0.0,
++            0.0,
++        ],
++    };
++    queue.write_buffer(&gpu.params, 0, bytemuck::bytes_of(&params));
++    let post = target.post_process_write();
++    let bind = device.create_bind_group(
++        Some("native_clarity"),
++        &cache.get_bind_group_layout(&gpu.layout),
++        &BindGroupEntries::sequential((
++            post.source,
++            &gpu.sampler,
++            depth.view(),
++            gpu.params.as_entire_buffer_binding(),
++        )),
++    );
++    let attachments = [Some(RenderPassColorAttachment {
++        view: post.destination,
++        resolve_target: None,
++        depth_slice: None,
++        ops: Operations {
++            load: LoadOp::Clear(LinearRgba::BLACK.into()),
++            store: StoreOp::Store,
++        },
++    })];
++    let mut pass = context
++        .command_encoder()
++        .begin_render_pass(&RenderPassDescriptor {
++            label: Some("native_clarity"),
++            color_attachments: &attachments,
++            depth_stencil_attachment: None,
++            timestamp_writes: None,
++            occlusion_query_set: None,
++            multiview_mask: None,
++        });
++    pass.set_pipeline(pipeline);
++    pass.set_bind_group(0, &bind, &[]);
++    pass.draw(0..3, 0..1);
++    if !*announced {
++        diag::info!(
++            World,
++            "native clarity: READY edge-AA=true contact-shading={}",
++            gpu.contact_shading
++        );
++        *announced = true;
++    }
++}
++
++#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub(super) struct ClaritySet;
++
++pub(super) fn register(app: &mut App) {
++    if std::env::var("IW4L_CLARITY").as_deref() == Ok("0") {
++        return;
++    }
++    bevy::asset::embedded_asset!(app, "clarity.wgsl");
++    if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
++        render_app.add_systems(RenderStartup, init).add_systems(
++            Core3d,
++            draw.in_set(Core3dSystems::PostProcess)
++                .in_set(ClaritySet)
++                .after(PostFxSet),
++        );
++    }
++}
+diff --git a/crates/render_gpu/src/drawsurf/clarity.wgsl b/crates/render_gpu/src/drawsurf/clarity.wgsl
+new file mode 100644
+index 0000000..9d0442c
+--- /dev/null
++++ b/crates/render_gpu/src/drawsurf/clarity.wgsl
+@@ -0,0 +1,71 @@
++struct Params {
++    world_from_clip: mat4x4<f32>,
++    camera: vec4<f32>,
++    viewport: vec4<f32>,
++    tuning: vec4<f32>,
++}
++@group(0) @binding(0) var scene: texture_2d<f32>;
++@group(0) @binding(1) var linear_sampler: sampler;
++@group(0) @binding(2) var depth: texture_depth_2d;
++@group(0) @binding(3) var<uniform> params: Params;
++
++@vertex fn vertex(@builtin(vertex_index) id: u32) -> @builtin(position) vec4<f32> {
++    let uv = vec2<f32>(f32((id << 1u) & 2u), f32(id & 2u));
++    return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
++}
++fn color(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(scene, linear_sampler, uv, 0.0).rgb; }
++fn luma(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.299, 0.587, 0.114)); }
++fn edge_aa(uv: vec2<f32>) -> vec3<f32> {
++    let px = params.viewport.zw;
++    let center = color(uv);
++    let nw = luma(color(uv + px * vec2<f32>(-1.0, -1.0)));
++    let ne = luma(color(uv + px * vec2<f32>(1.0, -1.0)));
++    let sw = luma(color(uv + px * vec2<f32>(-1.0, 1.0)));
++    let se = luma(color(uv + px * vec2<f32>(1.0, 1.0)));
++    let mid = luma(center);
++    let low = min(mid, min(min(nw, ne), min(sw, se)));
++    let high = max(mid, max(max(nw, ne), max(sw, se)));
++    if high - low < max(0.035, high * 0.14) { return center; }
++    var direction = vec2<f32>(-((nw+ne)-(sw+se)), (nw+sw)-(ne+se));
++    let reduce = max((nw+ne+sw+se)*0.03125, 0.0078125);
++    direction = clamp(direction / (min(abs(direction.x), abs(direction.y)) + reduce), vec2<f32>(-8.0), vec2<f32>(8.0))*px;
++    let a = 0.5*(color(uv + direction*(-1.0/6.0)) + color(uv + direction*(1.0/6.0)));
++    let b = a*0.5 + 0.25*(color(uv-direction*0.5) + color(uv+direction*0.5));
++    return select(b, a, luma(b)<low || luma(b)>high);
++}
++fn depth_at(pixel: vec2<f32>) -> f32 {
++    return textureLoad(depth, clamp(vec2<i32>(pixel), vec2<i32>(0), vec2<i32>(params.viewport.xy)-1), 0);
++}
++fn world_at(pixel: vec2<f32>) -> vec3<f32> {
++    let uv = (floor(pixel)+0.5)*params.viewport.zw;
++    let h = params.world_from_clip * vec4<f32>(uv.x*2.0-1.0, 1.0-uv.y*2.0, depth_at(pixel), 1.0);
++    return h.xyz/h.w;
++}
++fn contact_shade(pixel: vec2<f32>) -> f32 {
++    let d = depth_at(pixel);
++    if params.tuning.x == 0.0 || d < 0.03 || d > 0.99999 { return 1.0; }
++    let p = world_at(pixel);
++    let left = p-world_at(pixel-vec2<f32>(1.0,0.0));
++    let right = world_at(pixel+vec2<f32>(1.0,0.0))-p;
++    let up = p-world_at(pixel-vec2<f32>(0.0,1.0));
++    let down = world_at(pixel+vec2<f32>(0.0,1.0))-p;
++    let dx = select(left, right, dot(left,left)>dot(right,right));
++    let dy = select(up, down, dot(up,up)>dot(down,down));
++    let n0 = cross(dx,dy);
++    if dot(n0,n0)<0.000001 { return 1.0; }
++    var normal = normalize(n0);
++    if dot(normal,params.camera.xyz-p)<0.0 { normal = -normal; }
++    let radius = clamp(32.0*params.viewport.y*0.5*params.tuning.y/max(distance(params.camera.xyz,p),32.0),2.0,28.0);
++    var occ = 0.0;
++    for(var i=0; i<8; i++) {
++        let angle = f32(i)*0.785398;
++        let q = world_at(pixel + vec2<f32>(cos(angle),sin(angle))*radius);
++        let delta = q-p;
++        let dist = length(delta);
++        occ += max(dot(normal,delta)/max(dist,0.1)-0.12,0.0)*max(1.0-dist/48.0,0.0);
++    }
++    return clamp(1.0-occ*0.16,0.72,1.0);
++}
++@fragment fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
++    return vec4<f32>(edge_aa(position.xy*params.viewport.zw)*contact_shade(position.xy),1.0);
 +}
